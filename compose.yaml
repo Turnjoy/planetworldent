@@ -12,9 +12,17 @@ services:
     environment:
       HOME: /tmp
       WRANGLER_SEND_METRICS: "false"
+    command:
+      - npm
+      - run
+      - pages:dev
+      - --
+      - --compatibility-date=2026-11-25
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
+      - /app/.wrangler:rw,noexec,nosuid,size=64m,mode=1777
+      - /app/node_modules/.mf:rw,noexec,nosuid,size=32m,mode=1777
     cap_drop:
       - ALL
     security_opt:
