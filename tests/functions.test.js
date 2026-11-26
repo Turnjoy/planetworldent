@@ -57,7 +57,10 @@ test('event listing returns only configured active rows with ticket stats', asyn
 }));
 
 test('event slug endpoint returns a matching active event and 404 for missing event', async () => withFetch(async url => {
-  if (String(url).includes('/rest/v1/events?')) return response(String(url).includes('id=eq.missing') ? [] : [event]);
+  if (String(url).includes('/rest/v1/events?')) {
+    assert.match(String(url), /slug=eq\./);
+    return response(String(url).includes('slug=eq.missing') ? [] : [event]);
+  }
   if (String(url).includes('/rest/v1/rpc/get_event_ticket_stats')) return response(stats);
   throw new Error(`Unexpected request ${url}`);
 }, async () => {
