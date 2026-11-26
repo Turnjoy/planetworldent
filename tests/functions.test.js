@@ -13,6 +13,7 @@ import { onRequestPost as passesPost } from '../functions/api/passes.js';
 import { onRequestPost as webhookPost } from '../functions/api/paystack-webhook.js';
 import { onRequestGet as verifyPaymentGet } from '../functions/api/verify-payment.js';
 import { onRequestGet as ticketQrGet } from '../functions/api/ticket-qr.js';
+import { onRequestGet as verifyTicketGet } from '../functions/api/verify-ticket.js';
 import { onRequestPost as adminResendTicketEmailPost } from '../functions/api/admin/resend-ticket-email.js';
 import { sign } from '../functions/api/_shared.js';
 
@@ -251,17 +252,36 @@ test('admin can deliberately resend a paid ticket email with its QR image', asyn
   const emailEnv={...env,BREVO_API_KEY:'brevo-test-key'};
   await withFetch(async (url,init={})=>{
     const target=String(url);
-    if(target.includes('/rpc/prepare_ticket_email_resend'))return response({ok:true});
+    if(target.includes('/rest/v1/orders?reference=eq.')){assert.equal(init.method,'PATCH');assert.match(target,/status=eq\.paid/);assert.match(target,/email_sending=eq\.false/);return response([{reference:'SSS-ABCDEF012345'}]);}
     if(target.includes('/rpc/claim_order_email'))return response({claimed:true});
     if(target.includes('/rest/v1/orders?'))return response([{reference:'SSS-ABCDEF012345',full_name:'Ada Guest',email:'ada@example.test',quantity:1,ticket_phase:'Early Bird',event_id:event.id}]);
     if(target.includes('/rest/v1/events?'))return response([{title:event.title,event_date:event.event_date,venue:event.venue,slug:event.slug}]);
     if(target.includes('/rest/v1/tickets?'))return response([{code:'SSS-123456',qr_token:qrToken}]);
-    if(target==='https://api.brevo.com/v3/smtp/email'){const body=JSON.parse(init.body);assert.match(body.htmlContent,/api\/ticket-qr\?token=/);assert.match(body.htmlContent,/https:\/\/wa\.me\/2349157428112/);assert.match(body.htmlContent,/tel:07057642817/);assert.doesNotMatch(body.htmlContent,/Open event and retrieve pass/);return response({messageId:'brevo-resend'},201);}
+    if(target==='https://api.brevo.com/v3/smtp/email'){const body=JSON.parse(init.body);assert.match(body.htmlContent,/api\/ticket-qr\?token=/);assert.match(body.htmlContent,/verify-ticket\?reference=/);assert.match(body.htmlContent,/mailto:tickets@planetworldentetainment\.com\.ng/);assert.match(body.htmlContent,/https:\/\/wa\.me\/2349157428112/);assert.match(body.htmlContent,/tel:07057642817/);assert.doesNotMatch(body.htmlContent,/Open event and retrieve pass/);return response({messageId:'brevo-resend'},201);}
     if(target.includes('/rpc/finish_order_email'))return response({ok:true});
     throw new Error(`Unexpected request ${target}`);
   },async()=>{
     const result=await adminResendTicketEmailPost({request:request('https://tickets.test/api/admin/resend-ticket-email','POST',{reference:'SSS-ABCDEF012345'},{'x-admin-pin':emailEnv.ADMIN_PIN}),env:emailEnv});
     assert.equal(result.status,200);
     assert.equal((await result.json()).sent,true);
+  });
+});
+
+test('ticket verification checks the signed token against a paid order and ticket', async () => {
+  const code='SSS-123456', reference='SSS-ABCDEF012345';
+  const sig=await sign(env.QR_SIGNING_SECRET,`${code}.${reference}`);
+  const url=`https://tickets.test/api/verify-ticket?reference=${reference}&code=${code}&sig=${sig}`;
+  await withFetch(async target=>{
+    const text=String(target);
+    if(text.includes('/rest/v1/tickets?'))return response([{code,order_reference:reference,ticket_phase:'Early Bird',status:'valid',event_id:event.id}]);
+    if(text.includes('/rest/v1/orders?'))return response([{reference,full_name:'Ada Guest',quantity:2,status:'paid',event_id:event.id}]);
+    if(text.includes('/rest/v1/events?'))return response([{title:event.title,event_date:event.event_date,venue:event.venue}]);
+    throw new Error(`Unexpected request ${target}`);
+  },async()=>{
+    const result=await verifyTicketGet({request:new Request(url),env});
+    assert.equal(result.status,200);
+    assert.deepEqual(await result.json(),{valid:true,status:'VALID',ticket_type:'Early Bird',buyer_name:'Ada Guest',quantity:2,ticket_code:code,event:{title:event.title,event_date:event.event_date,venue:event.venue}});
+    const forged=await verifyTicketGet({request:new Request(url.replace(sig,'0'.repeat(64))),env});
+    assert.deepEqual(await forged.json(),{valid:false,status:'INVALID'});
   });
 });

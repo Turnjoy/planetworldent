@@ -3,8 +3,17 @@ export async function onRequestPost({ request, env }) {
   const gatePin = env.GATE_PIN || '';
   if (!gatePin || !env.QR_SIGNING_SECRET || env.QR_SIGNING_SECRET.length < 32 || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return json({ error: 'Gate check-in is not configured.' }, 503);
   try {
-    const { pin, token } = await readJson(request, 2_048);
-    if (typeof token !== 'string' || token.length > 300) return json({ error: 'Invalid QR payload.' }, 400);
+    const { pin, token: rawToken } = await readJson(request, 2_048);
+    let token = rawToken;
+    if (typeof token !== 'string' || token.length > 1_000) return json({ error: 'Invalid QR payload.' }, 400);
+    if (/^https:\/\//i.test(token)) {
+      try {
+        const scanned = new URL(token);
+        if (scanned.hostname !== new URL(env.SITE_URL || 'https://planetworldentetainment.com.ng').hostname || scanned.pathname !== '/verify-ticket') throw new Error('invalid host');
+        token = `${scanned.searchParams.get('code')}.${scanned.searchParams.get('reference')}.${scanned.searchParams.get('sig')}`;
+      } catch { return json({ error: 'Invalid QR payload.' }, 400); }
+    }
+    if (token.length > 300) return json({ error: 'Invalid QR payload.' }, 400);
     const ip = request.headers.get('cf-connecting-ip') || 'unknown';
     const rateKey = await sign(env.QR_SIGNING_SECRET, ip);
     const auth = await rpc(env, 'gate_auth_attempt', { p_key: rateKey, p_valid: timingSafeEqual(String(pin || ''), gatePin) });

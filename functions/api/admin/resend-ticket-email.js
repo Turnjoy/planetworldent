@@ -1,4 +1,4 @@
-import { adminAuthorized, json, readJson, rpc } from '../_shared.js';
+import { adminAuthorized, json, readJson, supabase } from '../_shared.js';
 import { sendConfirmationEmail } from '../_fulfillment.js';
 
 export async function onRequestPost({ request, env }) {
@@ -8,8 +8,11 @@ export async function onRequestPost({ request, env }) {
     const body = await readJson(request, 2_048);
     const reference = String(body.reference || '').trim().toUpperCase();
     if (!/^SSS-[A-F0-9]{12}$/.test(reference)) return json({ error: 'Enter a valid payment reference.' }, 400);
-    const prepared = await rpc(env, 'prepare_ticket_email_resend', { p_reference: reference });
-    if (!prepared.ok || prepared.data?.ok !== true) return json({ error: 'Paid order not found, or its email is currently being sent.' }, 404);
+    const prepared = await supabase(env, `rest/v1/orders?reference=eq.${encodeURIComponent(reference)}&status=eq.paid&email_sending=eq.false`, {
+      method: 'PATCH', body: JSON.stringify({ email_sent: false, email_message_id: null })
+    });
+    if (!prepared.ok) return json({ error: 'Could not prepare the paid order email.' }, 503);
+    if (!Array.isArray(prepared.data) || prepared.data.length !== 1) return json({ error: 'Paid order not found, or its email is currently being sent.' }, 404);
     const result = await sendConfirmationEmail(reference, env);
     if (!result.sent) return json({ error: result.error || 'Ticket email could not be sent.' }, 502);
     return json({ sent: true, reference });

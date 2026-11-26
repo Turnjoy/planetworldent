@@ -20,8 +20,13 @@ export async function onRequestGet({ request, env }) {
   if (parts.length !== 3 || !/^SSS-[A-F0-9]{6}$/i.test(parts[0]) || !/^SSS-[A-F0-9]{12}$/i.test(parts[1]) || !/^[a-f0-9]{64}$/i.test(parts[2])) return svgResponse('', 404);
   const expected = await sign(env.QR_SIGNING_SECRET, `${parts[0]}.${parts[1]}`);
   if (!timingSafeEqual(expected, parts[2].toLowerCase())) return svgResponse('', 404);
+  const siteUrl = String(env.SITE_URL || 'https://planetworldentetainment.com.ng').replace(/\/$/, '');
+  const verificationUrl = new URL('/verify-ticket', siteUrl);
+  verificationUrl.searchParams.set('reference', parts[1]);
+  verificationUrl.searchParams.set('code', parts[0]);
+  verificationUrl.searchParams.set('sig', parts[2]);
   const svg = renderToStaticMarkup(createElement(QRCodeSVG, {
-    value: token,
+    value: verificationUrl.toString(),
     size: 240,
     level: 'H',
     includeMargin: true,
