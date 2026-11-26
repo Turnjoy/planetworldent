@@ -170,7 +170,9 @@ begin
  select * into o from orders where reference=p_reference for update;
  if not found then return jsonb_build_object('ok',false,'message','Order not found'); end if;
  if p_currency<>'NGN' or p_paystack_amount<>o.total*100 then return jsonb_build_object('ok',false,'message','Payment amount mismatch'); end if;
- if o.status='cancelled' then return jsonb_build_object('ok',false,'message','Order was cancelled'); end if;
+ -- A cancelled hold may still have a successful Paystack transaction (for
+ -- example, the delayed success arrived after a failure/reversal notification).
+ -- This RPC is service_role-only and its caller verifies Paystack success first.
  if o.status<>'paid' then update orders set status='paid',paid_at=coalesce(paid_at,now()) where reference=p_reference; end if;
  select count(*) into v_existing from tickets where order_reference=p_reference;
  if v_existing>=o.quantity then return jsonb_build_object('ok',true,'idempotent',true); end if;

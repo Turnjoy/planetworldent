@@ -53,7 +53,7 @@ where reference = 'SSS-ABCDEF012345' and status = 'pending'
 returning reference, status, quantity, ticket_phase, event_id, paid_at;
 ```
 
-Then call `https://planetworldentetainment.com.ng/api/verify-payment?reference=SSS-ABCDEF012345` in a browser to verify it with Paystack and ensure the QR tickets and email are fulfilled. Never manually mark a failed or unverified payment as paid.
+Then call `https://planetworldentetainment.com.ng/api/verify-payment?reference=SSS-ABCDEF012345` in a browser to verify it with Paystack and ensure the QR tickets and email are fulfilled. A verified Paystack success can also recover a previously cancelled order; never manually mark an unverified payment as paid.
 
 ## Routes
 
