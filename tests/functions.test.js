@@ -12,6 +12,8 @@ import { onRequestPost as gatePost } from '../functions/api/gate.js';
 import { onRequestPost as passesPost } from '../functions/api/passes.js';
 import { onRequestPost as webhookPost } from '../functions/api/paystack-webhook.js';
 import { onRequestGet as verifyPaymentGet } from '../functions/api/verify-payment.js';
+import { onRequestGet as ticketQrGet } from '../functions/api/ticket-qr.js';
+import { onRequestPost as adminResendTicketEmailPost } from '../functions/api/admin/resend-ticket-email.js';
 import { sign } from '../functions/api/_shared.js';
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
@@ -181,6 +183,8 @@ test('Paystack webhook verifies the signature and transaction, then fulfills one
   const invalid = await webhookPost({ request: new Request('https://tickets.test/api/paystack-webhook', { method: 'POST', body: raw, headers: { 'x-paystack-signature': 'bad' } }), env });
   assert.equal(invalid.status, 401);
   const signature = await sign(env.PAYSTACK_SECRET_KEY, raw, 'SHA-512');
+  const qrPayload = 'SSS-123456.SSS-ABCDEF012345';
+  const qrToken = `${qrPayload}.${await sign(env.QR_SIGNING_SECRET, qrPayload)}`;
   const calls = [];
   const brevoEnv = { ...env, BREVO_API_KEY: 'brevo-test-key' };
   await withFetch(async (url, init = {}) => {
@@ -190,8 +194,8 @@ test('Paystack webhook verifies the signature and transaction, then fulfills one
     if (target.includes('/rpc/claim_order_email')) return response({ claimed: true });
     if (target.includes('/rest/v1/orders?')) return response([{ reference: 'SSS-ABCDEF012345', full_name: 'Ada Guest', email: 'ada@example.test', quantity: 1, ticket_phase: 'Early Bird', event_id: event.id }]);
     if (target.includes('/rest/v1/events?')) return response([{ title: event.title, event_date: event.event_date, venue: event.venue, slug: event.slug }]);
-    if (target.includes('/rest/v1/tickets?')) return response([{ code: 'SSS-123456', qr_token: 'signed.qr.token' }]);
-    if (target === 'https://api.brevo.com/v3/smtp/email') { assert.equal(init.headers['api-key'], 'brevo-test-key'); return response({ messageId: 'brevo-message' }, 201); }
+    if (target.includes('/rest/v1/tickets?')) return response([{ code: 'SSS-123456', qr_token: qrToken }]);
+    if (target === 'https://api.brevo.com/v3/smtp/email') { assert.equal(init.headers['api-key'], 'brevo-test-key'); assert.match(JSON.parse(init.body).htmlContent, /api\/ticket-qr\?token=/); return response({ messageId: 'brevo-message' }, 201); }
     if (target.includes('/rpc/finish_order_email')) { assert.equal(JSON.parse(init.body).p_sent, true); return response({ ok: true }); }
     throw new Error(`Unexpected request ${target}`);
   }, async () => {
@@ -225,5 +229,39 @@ test('payment verification does not resend an already claimed order email', asyn
     assert.equal(result.status, 200);
     assert.equal((await result.json()).email_pending, false);
     assert.equal(emailCalls, 0);
+  });
+});
+
+test('ticket QR image endpoint only renders correctly signed ticket tokens', async () => {
+  const payload = 'SSS-123456.SSS-ABCDEF012345';
+  const token = `${payload}.${await sign(env.QR_SIGNING_SECRET, payload)}`;
+  const invalid = await ticketQrGet({ request: new Request('https://tickets.test/api/ticket-qr?token=bad'), env });
+  assert.equal(invalid.status, 404);
+  const result = await ticketQrGet({ request: new Request(`https://tickets.test/api/ticket-qr?token=${encodeURIComponent(token)}`), env });
+  assert.equal(result.status, 200);
+  assert.match(result.headers.get('content-type'), /image\/svg\+xml/);
+  assert.match(await result.text(), /<svg/);
+});
+
+test('admin can deliberately resend a paid ticket email with its QR image', async () => {
+  const unauthorized = await adminResendTicketEmailPost({ request: request('https://tickets.test/api/admin/resend-ticket-email','POST',{reference:'SSS-ABCDEF012345'}), env });
+  assert.equal(unauthorized.status, 401);
+  const payload='SSS-123456.SSS-ABCDEF012345';
+  const qrToken=`${payload}.${await sign(env.QR_SIGNING_SECRET,payload)}`;
+  const emailEnv={...env,BREVO_API_KEY:'brevo-test-key'};
+  await withFetch(async (url,init={})=>{
+    const target=String(url);
+    if(target.includes('/rpc/prepare_ticket_email_resend'))return response({ok:true});
+    if(target.includes('/rpc/claim_order_email'))return response({claimed:true});
+    if(target.includes('/rest/v1/orders?'))return response([{reference:'SSS-ABCDEF012345',full_name:'Ada Guest',email:'ada@example.test',quantity:1,ticket_phase:'Early Bird',event_id:event.id}]);
+    if(target.includes('/rest/v1/events?'))return response([{title:event.title,event_date:event.event_date,venue:event.venue,slug:event.slug}]);
+    if(target.includes('/rest/v1/tickets?'))return response([{code:'SSS-123456',qr_token:qrToken}]);
+    if(target==='https://api.brevo.com/v3/smtp/email'){const body=JSON.parse(init.body);assert.match(body.htmlContent,/api\/ticket-qr\?token=/);assert.doesNotMatch(body.htmlContent,/Open event and retrieve pass/);return response({messageId:'brevo-resend'},201);}
+    if(target.includes('/rpc/finish_order_email'))return response({ok:true});
+    throw new Error(`Unexpected request ${target}`);
+  },async()=>{
+    const result=await adminResendTicketEmailPost({request:request('https://tickets.test/api/admin/resend-ticket-email','POST',{reference:'SSS-ABCDEF012345'},{'x-admin-pin':emailEnv.ADMIN_PIN}),env:emailEnv});
+    assert.equal(result.status,200);
+    assert.equal((await result.json()).sent,true);
   });
 });

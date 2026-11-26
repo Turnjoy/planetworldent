@@ -208,6 +208,22 @@ begin
  return jsonb_build_object('ok',found);
 end $$;
 
+create or replace function public.prepare_ticket_email_resend(p_reference text) returns jsonb
+language plpgsql security definer set search_path=public,extensions as $$
+begin
+ update orders set email_sent=false,email_message_id=null
+ where reference=p_reference and status='paid' and email_sending=false;
+ return jsonb_build_object('ok',found);
+end $$;
+
+create or replace function public.prepare_ticket_email_resend(p_reference text) returns jsonb
+language plpgsql security definer set search_path=public,extensions as $$
+begin
+ update orders set email_sent=false,email_message_id=null
+ where reference=p_reference and status='paid' and email_sending=false;
+ return jsonb_build_object('ok',found);
+end $$;
+
 create or replace function public.redeem_ticket(p_token text,p_signing_secret text) returns jsonb
 language plpgsql security definer set search_path=public,extensions as $$
 declare v_parts text[]; v_payload text; v_ticket tickets%rowtype;
@@ -230,6 +246,8 @@ do $$ declare f regprocedure; begin
   'public.confirm_ticket_order(text,bigint,text,text)'::regprocedure,
   'public.claim_order_email(text)'::regprocedure,
   'public.finish_order_email(text,boolean,text)'::regprocedure,
+  'public.prepare_ticket_email_resend(text)'::regprocedure,
+  'public.prepare_ticket_email_resend(text)'::regprocedure,
   'public.early_bird_remaining()'::regprocedure,
   'public.get_event_ticket_stats(uuid)'::regprocedure,
   'public.gate_auth_attempt(text,boolean)'::regprocedure,

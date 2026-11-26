@@ -16,7 +16,7 @@ async function verifyPaystack(reference, env) {
   return { data };
 }
 
-async function sendConfirmationEmail(reference, env) {
+export async function sendConfirmationEmail(reference, env) {
   if (!env.BREVO_API_KEY) return { sent: false, skipped: true };
   const claimed = await rpc(env, 'claim_order_email', { p_reference: reference });
   if (!claimed.ok) return { error: 'Could not claim confirmation email.' };
@@ -35,16 +35,19 @@ async function sendConfirmationEmail(reference, env) {
     const tickets = ticketsResult.data || [];
     if (!eventResult.ok || !event || !ticketsResult.ok || tickets.length !== Number(order.quantity)) throw new Error('Ticket details are not ready for email.');
 
-    const url = `${siteUrl(env)}/events/${encodeURIComponent(event.slug)}?reference=${encodeURIComponent(reference)}`;
-    const codes = tickets.map(t => `<li style="margin:8px 0"><strong>${escapeHtml(t.code)}</strong><br><small>QR ticket token: ${escapeHtml(t.qr_token)}</small></li>`).join('');
-    const htmlContent = `<div style="font:16px/1.6 Arial,sans-serif;color:#14202f;max-width:620px;margin:auto"><h1 style="color:#087f8c">Payment confirmed</h1><p>Hello ${escapeHtml(order.full_name)}, your payment for <strong>${escapeHtml(event.title)}</strong> is confirmed.</p><p>${escapeHtml(event.event_date)}<br>${escapeHtml(event.venue)}<br>${escapeHtml(order.ticket_phase)} · ${escapeHtml(order.quantity)} ticket(s)</p><h2>Your ticket code${tickets.length === 1 ? '' : 's'}</h2><ul>${codes}</ul><p>To display your QR pass, open the event page and choose “Already paid? Retrieve your pass”. Use this checkout email and reference <strong>${escapeHtml(reference)}</strong>.</p><p><a href="${escapeHtml(url)}" style="display:inline-block;background:#087f8c;color:white;padding:12px 20px;border-radius:8px;text-decoration:none">Open event and retrieve pass</a></p><p>Thank you,<br>SOAKERS SPLASH SQUAD2027</p></div>`;
+    const codes = tickets.map(t => {
+      const qrUrl = `${siteUrl(env)}/api/ticket-qr?token=${encodeURIComponent(t.qr_token)}`;
+      return `<li style="list-style:none;margin:20px 0;padding:16px;background:#f4f8f8;border-radius:12px;text-align:center"><img src="${escapeHtml(qrUrl)}" width="240" height="240" alt="QR code for ticket ${escapeHtml(t.code)}" style="display:block;width:240px;height:240px;max-width:100%;margin:0 auto 12px;background:#fff"><strong>${escapeHtml(t.code)}</strong></li>`;
+    }).join('');
+    const htmlContent = `<div style="font:16px/1.6 Arial,sans-serif;color:#14202f;max-width:620px;margin:auto"><h1 style="color:#087f8c">Payment confirmed</h1><p>Hello ${escapeHtml(order.full_name)}, your payment for <strong>${escapeHtml(event.title)}</strong> is confirmed.</p><p>${escapeHtml(event.event_date)}<br>${escapeHtml(event.venue)}<br>${escapeHtml(order.ticket_phase)} · ${escapeHtml(order.quantity)} ticket(s)</p><h2>Your QR ticket${tickets.length === 1 ? '' : 's'}</h2><p>Show the QR code${tickets.length === 1 ? '' : 's'} below at the entrance. No website or app is needed.</p><ul style="padding:0">${codes}</ul><p>Keep this email as your ticket. If your mail app hides images, allow images from this sender to display your QR code.</p><p>Thank you,<br>SOAKERS SPLASH SQUAD2027</p></div>`;
+    const textContent = `Payment confirmed for ${event.title}\n${event.event_date}\n${event.venue}\n${order.ticket_phase} · ${order.quantity} ticket(s)\nTicket code(s): ${tickets.map(t => t.code).join(', ')}\nShow the QR code in the HTML email at the entrance.`;
     const senderEmail = env.BREVO_SENDER_EMAIL || 'tickets@planetworldentetainment.com.ng';
     const senderName = env.BREVO_SENDER_NAME || 'SOAKERS SPLASH SQUAD2027';
     mailRequestStarted = true;
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: { 'api-key': env.BREVO_API_KEY, 'content-type': 'application/json' },
-      body: JSON.stringify({ sender: { email: senderEmail, name: senderName }, to: [{ email: order.email, name: order.full_name }], subject: `Your ${event.title} tickets are confirmed`, htmlContent, tags: ['ticket-confirmation'], headers: { 'X-Mailin-custom': `order-${reference}` } })
+      body: JSON.stringify({ sender: { email: senderEmail, name: senderName }, to: [{ email: order.email, name: order.full_name }], subject: `Your ${event.title} tickets are confirmed`, htmlContent, textContent, tags: ['ticket-confirmation'], headers: { 'X-Mailin-custom': `order-${reference}` } })
     });
     const mail = await response.json().catch(() => null);
     if (!response.ok) {
