@@ -256,7 +256,7 @@ test('admin can deliberately resend a paid ticket email with its QR image', asyn
     if(target.includes('/rest/v1/orders?'))return response([{reference:'SSS-ABCDEF012345',full_name:'Ada Guest',email:'ada@example.test',quantity:1,ticket_phase:'Early Bird',event_id:event.id}]);
     if(target.includes('/rest/v1/events?'))return response([{title:event.title,event_date:event.event_date,venue:event.venue,slug:event.slug}]);
     if(target.includes('/rest/v1/tickets?'))return response([{code:'SSS-123456',qr_token:qrToken}]);
-    if(target==='https://api.brevo.com/v3/smtp/email'){const body=JSON.parse(init.body);assert.match(body.htmlContent,/api\/ticket-qr\?token=/);assert.doesNotMatch(body.htmlContent,/Open event and retrieve pass/);return response({messageId:'brevo-resend'},201);}
+    if(target==='https://api.brevo.com/v3/smtp/email'){const body=JSON.parse(init.body);assert.match(body.htmlContent,/api\/ticket-qr\?token=/);assert.match(body.htmlContent,/https:\/\/wa\.me\/2349157428112/);assert.match(body.htmlContent,/tel:07057642817/);assert.doesNotMatch(body.htmlContent,/Open event and retrieve pass/);return response({messageId:'brevo-resend'},201);}
     if(target.includes('/rpc/finish_order_email'))return response({ok:true});
     throw new Error(`Unexpected request ${target}`);
   },async()=>{

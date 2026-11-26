@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowLeft, ArrowRight, CalendarDays, Check, ExternalLink, LoaderCircle, MapPin, Plus, ShieldCheck, Ticket, Waves, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CalendarDays, Check, ExternalLink, LoaderCircle, MapPin, Phone, Plus, ShieldCheck, Ticket, Waves, X } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import './index.css';
 import './passes.css';
@@ -9,14 +9,21 @@ import './mobile-first.css';
 import './platform.css';
 
 const money = n => `₦${Number(n || 0).toLocaleString('en-NG')}`;
+const whatsappUrl = `https://wa.me/2349157428112?text=${encodeURIComponent('Hello Plannet World Entertainment, I need help with Soakers Splash Squad 2027 tickets.')}`;
+const phoneUrl = 'tel:07057642817';
+function WhatsAppGlyph({size=17}) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.52 3.48A11.8 11.8 0 0 0 1.86 17.72L.3 23.4l5.82-1.53A11.8 11.8 0 0 0 20.52 3.48ZM12 21.02c-1.8 0-3.56-.48-5.1-1.4l-.37-.22-3.45.9.92-3.36-.24-.39A9.8 9.8 0 1 1 12 21.02Zm5.38-7.34c-.3-.15-1.75-.86-2.02-.96-.27-.1-.47-.15-.66.15-.2.3-.76.96-.93 1.16-.17.2-.34.22-.64.07-.3-.15-1.25-.46-2.38-1.47-.88-.78-1.48-1.75-1.65-2.05-.17-.3-.02-.46.13-.6.13-.14.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.38-.03-.53-.07-.15-.66-1.6-.91-2.2-.24-.58-.49-.5-.66-.5h-.56c-.2 0-.52.08-.79.38-.27.3-1.03 1.01-1.03 2.46s1.06 2.86 1.2 3.06c.15.2 2.08 3.18 5.04 4.46.7.3 1.25.48 1.68.61.7.22 1.35.19 1.86.11.57-.08 1.75-.72 2-1.42.25-.7.25-1.3.18-1.42-.07-.12-.27-.2-.57-.35Z"/></svg>; }
 const socials = [
-  ['TikTok', import.meta.env.VITE_ORGANIZER_TIKTOK_URL || 'https://www.tiktok.com/@ibukun_oluwa70'],
-  ['Instagram', import.meta.env.VITE_ORGANIZER_INSTAGRAM_URL || 'https://www.instagram.com/ibukun_oluwa70/']
+  ['WhatsApp', whatsappUrl, WhatsAppGlyph],
+  ['Call', phoneUrl, Phone],
+  ['TikTok', import.meta.env.VITE_ORGANIZER_TIKTOK_URL || 'https://www.tiktok.com/@ibukun_oluwa70', ExternalLink],
+  ['Instagram', import.meta.env.VITE_ORGANIZER_INSTAGRAM_URL || 'https://www.instagram.com/ibukun_oluwa70/', ExternalLink]
 ];
 const eventHref = slug => `/events/${encodeURIComponent(slug)}`;
 
+function ContactDock(){const [open,setOpen]=useState(false);return <aside className={`contact-dock ${open?'contact-open':''}`}><button className="dock-toggle" onClick={()=>setOpen(value=>!value)} aria-label={open?'Close contact options':'Contact the organizer'} aria-expanded={open}>{open?<X size={19}/>:<Phone size={19}/>}</button><span className="dock-label">TALK TO THE CREW</span><div className="dock-items"><a href={whatsappUrl} aria-label="WhatsApp the organizer" title="WhatsApp"><WhatsAppGlyph size={17}/></a><a href={phoneUrl} aria-label="Call the organizer" title="Call"><Phone size={17}/></a></div></aside>}
+
 function Shell({ children }) {
-  return <><header className="platform-nav"><a className="platform-brand" href="/"><span className="brand-mark"><Waves size={20}/></span><span><b>PLANNET WORLD</b><small>ENTERTAINMENT</small></span></a><nav><a href="/#events">Events</a><a href="/admin">Admin</a></nav></header>{children}<footer className="platform-footer"><span>© PLANNET WORLD ENTERTAINMENT</span><div>{socials.map(([label,url])=><a key={label} href={url} target="_blank" rel="noreferrer">{label} <ExternalLink size={13}/></a>)}</div></footer></>;
+  return <><header className="platform-nav"><a className="platform-brand" href="/"><span className="brand-mark"><Waves size={20}/></span><span><b>PLANNET WORLD</b><small>ENTERTAINMENT</small></span></a><nav><a href="/#events">Events</a><a href="/admin">Admin</a><a className="platform-contact-icon" href={whatsappUrl} aria-label="WhatsApp the organizer" title="WhatsApp"><WhatsAppGlyph/></a><a className="platform-contact-icon" href={phoneUrl} aria-label="Call the organizer" title="Call"><Phone size={17}/></a></nav></header>{children}<footer className="platform-footer"><span>© PLANNET WORLD ENTERTAINMENT</span><div>{socials.map(([label,url,Icon])=><a key={label} href={url} aria-label={label} title={label} target={label==='Call'?undefined:'_blank'} rel={label==='Call'?undefined:'noreferrer'}><Icon size={15}/><span>{label}</span></a>)}</div></footer><ContactDock/></>;
 }
 
 function PhaseBadge({ event }) {
