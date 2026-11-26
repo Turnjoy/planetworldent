@@ -29,3 +29,24 @@ export function timingSafeEqual(a, b) {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
+
+export function adminAuthorized(request, env) {
+  const expected = env.ADMIN_PIN || env.GATE_PIN || '';
+  const supplied = request.headers.get('x-admin-pin') || '';
+  return expected.length >= 4 && timingSafeEqual(supplied, expected);
+}
+
+export function eventSlug(value) {
+  return String(value || '').normalize('NFKD').toLowerCase().replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 90);
+}
+
+export async function eventStats(env, id) {
+  const stats = await rpc(env, 'get_event_ticket_stats', { p_event_id: id });
+  const row = Array.isArray(stats.data) ? stats.data[0] : stats.data;
+  return stats.ok && row ? {
+    paid_count: Number(row.paid_count || 0),
+    active_phase: row.active_phase,
+    current_price: Number(row.current_price || 0),
+    early_bird_remaining: Number(row.early_bird_remaining || 0)
+  } : { paid_count: 0, active_phase: 'Early Bird', current_price: 0, early_bird_remaining: 0 };
+}

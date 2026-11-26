@@ -1,54 +1,54 @@
-# Soakers Splash Squad 2027
+# Plannet World Entertainment
 
-Luxury pool-party event landing page and ticket checkout for Plannet World Entertainment. Built with React, Vite, Cloudflare Pages Functions, Supabase and Paystack.
+Multi-event ticketing for Plannet World Entertainment. Built with React, Vite, Cloudflare Pages Functions, Supabase Postgres and Paystack.
 
 ## Local development
 
-1. Install Node.js 20+ and dependencies with `npm install`.
-2. Copy the public options in `.env.example` to `.env.local` if you want to customize social URLs.
-3. Run `npm run dev` for the visual page. Checkout and pass lookup need Cloudflare Pages Functions and configured server secrets; run with Wrangler (`npx wrangler pages dev dist`) after building to exercise those endpoints.
-4. Deploy the project as a Cloudflare Pages project with build command `npm run build` and output directory `dist`.
-
-## Docker test environment
-
-Docker builds the production bundle, then runs the same Cloudflare Pages Functions adapter used for local Pages testing. The container runs as the unprivileged Node user, is read-only except for temporary Wrangler state, drops Linux capabilities, and binds only to loopback.
-
-```powershell
-Copy-Item .env.docker.example .env.docker
-docker compose up --build
-```
-
-Open `http://localhost:8788`. The health endpoint is `http://localhost:8788/api/health`. Without server credentials, the UI loads but payment and gate APIs return a configuration error. For end-to-end payment testing, put only Paystack **test** credentials plus a non-production Supabase project in the ignored `.env.docker` file. Never add live credentials to Docker build args, image layers, Git, or client-side `VITE_` variables. Stop the container with `docker compose down`.
-
-The dependency versions are pinned and `package-lock.json` is committed so local, CI, and Docker installs use the same package tree.
+1. Install Node.js 22+ and dependencies with `npm install`.
+2. Copy `.env.example` to `.env.local` to set the public social links used by the Vite build.
+3. Run `npm run dev` for the UI. Run the built site with Cloudflare Pages Functions using `npm run build` followed by `npx wrangler pages dev dist` with server bindings configured locally.
+4. Deploy to Cloudflare Pages with build command `npm run build` and output directory `dist`.
 
 ## Cloudflare Pages variables and secrets
 
-Add these in **Settings → Variables and Secrets** for the Pages project. Mark all credentials as secrets. Do not expose server keys through `VITE_` variables.
+Add server values in **Settings → Variables and Secrets**. Store credentials and PINs as secrets. These exact names are read from `context.env` in Pages Functions:
 
 | Name | Purpose |
 | --- | --- |
-| `PAYSTACK_SECRET_KEY` | Initializes payments and validates Paystack webhook signatures. |
-| `ORGANIZER_SUBACCOUNT_CODE` | Paystack subaccount used for organizer settlement. |
+| `PAYSTACK_SECRET_KEY` | Initializes Paystack payments and verifies webhook signatures. |
+| `ORGANIZER_SUBACCOUNT_CODE` | Paystack subaccount for organizer settlement. |
 | `SUPABASE_URL` | Supabase project URL. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server-only access for the Pages Functions. |
-| `GATE_PIN` | Gate-tool PIN; local `localhost` dev fallback is `2027`. Required in production. |
-| `QR_SIGNING_SECRET` | Long random HMAC key that signs each ticket QR payload. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only Supabase access for Pages Functions. |
+| `GATE_PIN` | Gate check-in PIN and fallback for admin authentication. |
+| `ADMIN_PIN` | Admin API PIN; falls back to `GATE_PIN` when unset. |
+| `QR_SIGNING_SECRET` | Long random HMAC key used to sign ticket QR payloads. |
 
-Optional public build variables: `VITE_ORGANIZER_TIKTOK_URL` and `VITE_ORGANIZER_INSTAGRAM_URL`.
+The only Vite variables are public social links, read from `import.meta.env`:
+
+| Name | Purpose |
+| --- | --- |
+| `VITE_ORGANIZER_TIKTOK_URL` | Organizer TikTok profile URL. |
+| `VITE_ORGANIZER_INSTAGRAM_URL` | Organizer Instagram profile URL. |
+
+Never put server credentials in `.env.local`, a `VITE_` variable, source code, Docker build arguments or Git. `.env.example` and `.env.docker.example` use empty values and contain no credentials.
 
 ## Database setup
 
-Run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL editor. It creates orders and tickets, protects tables with RLS, and adds atomic stock reservation and payment confirmation RPCs. The early-bird cap counts paid tickets and unexpired checkout holds so concurrent checkouts cannot oversell the tier. Expired holds are ignored for stock calculations.
+Run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL editor. It is safe to rerun on the original single-event schema. It creates `events`, seeds Soakers Splash Squad 2027, backfills existing orders and tickets, adds event/phase/amount fields, enables RLS, and installs the server-side RPCs. `get_event_ticket_stats(p_event_id)` returns `paid_count`, `active_phase`, `current_price` and `early_bird_remaining`.
 
-In Paystack dashboard, configure a webhook URL at `https://YOUR_DOMAIN/api/paystack-webhook`. The handler verifies the raw request body using the Paystack secret, then checks the paid amount and currency before issuing passes. The QR payload has an HMAC-SHA256 signature. The PIN-protected `/api/gate` endpoint verifies the signature server-side and atomically marks each ticket as used. Failed PIN attempts are keyed by a one-way IP hash and limited to ten per ten-minute window. Re-run the schema when deploying this rate limit to an existing database.
+Checkout obtains pricing on the server and reserves tickets under an event inventory lock. Early Bird pricing changes to Regular when the paid ticket count reaches the event's configured limit. Active checkout holds prevent concurrent checkouts from exceeding the Early Bird allocation. Event banners use external HTTPS URLs or built-in gradients; this project does not use Supabase Storage.
 
-## Checkout notes
+Configure Paystack's webhook URL as `https://YOUR_DOMAIN/api/paystack-webhook`. The handler validates the raw signature and confirms amount and currency before issuing tickets. QR payloads use HMAC-SHA256. The gate endpoint validates and atomically redeems each ticket, with failed PIN attempts rate limited by hashed client IP.
 
-Ticket prices and quantity are validated again on the server. The fee uses the gross-up calculation from the event brief (1.5% + ₦100, capped at ₦2,000). Paystack is initialized with the organizer subaccount, the fee as `transaction_charge`, and `bearer: account` so the ticket subtotal is allocated to the organizer subaccount while the main account bears processing charges. Confirm the main account and subaccount split arrangement in Paystack test mode before launch. Guests retrieve passes from **My Pass** using the receipt reference and checkout email; automatic email delivery is not configured.
+## Routes
 
-## Event details
+- `/` lists every active event with a live ticket phase, price and remaining Early Bird inventory.
+- `/events/:slug` shows event details and checkout. The browser submits guest details and quantity; the function determines the price and sends `event_id` and `ticket_phase` in Paystack metadata with the organizer subaccount split.
+- `/admin` provides PIN-protected event creation, editing, activation and ticket sales stats.
+- `/api/admin/*` endpoints independently verify `ADMIN_PIN`, falling back to `GATE_PIN` when unset.
 
-**Soakers Splash Squad 2027** · Friday, 1 January 2027 · 10:00 PM till dawn · Igbekon, Ado-Odo, Ota, Ogun State.
+The admin PIN is sent in an `x-admin-pin` request header and checked by the server for every admin API call. The browser stores it only for the current tab session.
 
-The hero artwork is composed in CSS.
+## Seed event
+
+**Soakers Splash Squad 2027** · Friday, 1 January 2027 · 10:00 PM till dawn · Igbekon, Ado-Odo, Ota, Ogun State. Artwork uses CSS gradients by default.

@@ -1,6 +1,7 @@
 import { json, readJson, supabase } from './_shared.js';
 
 export async function onRequestPost({ request, env }) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return json({ error: 'Pass lookup is temporarily unavailable.' }, 503);
   try {
     const { email, reference } = await readJson(request, 4_096);
     if (!/^\S+@\S+\.\S+$/.test(String(email || '')) || !/^SSS-[A-F0-9]{12}$/i.test(String(reference || ''))) return json({ error: 'Enter the checkout email and order reference.' }, 400);

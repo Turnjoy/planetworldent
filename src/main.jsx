@@ -1,161 +1,93 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowDown, ArrowRight, Check, ChevronDown, Copy, Flame, MapPin, Menu, Minus, Music2, Phone, Plus, QrCode, Sparkles, Ticket, Waves, X, Zap, MessageCircle, LoaderCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CalendarDays, Check, ExternalLink, LoaderCircle, MapPin, Plus, ShieldCheck, Ticket, Waves, X } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import './index.css';
 import './passes.css';
 import './refinements.css';
 import './mobile-first.css';
+import './platform.css';
 
-const InstagramGlyph = ({size=17}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".8" fill="currentColor" stroke="none"/></svg>;
-const WhatsAppGlyph = ({size=17}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20.3 11.7a8.2 8.2 0 0 1-12.1 7.2L4 20l1.1-4a8.2 8.2 0 1 1 15.2-4.3Z"/><path d="M8.7 8.1c.2-.5.5-.5.8-.5h.5c.2 0 .4.1.5.4l.7 1.7c.1.3.1.5-.1.7l-.5.6c-.2.2-.2.4 0 .7.3.6 1 1.3 1.6 1.7.6.4.9.5 1.2.2l.7-.8c.2-.2.4-.3.7-.2l1.6.8c.3.1.4.3.4.5 0 .4-.2 1.2-.8 1.6-.5.4-1.1.6-1.8.4-1-.2-2.3-.9-3.7-2.1-1.2-1.1-2.1-2.5-2.3-3.4-.2-.8.1-1.6.5-2.1Z"/></svg>;
-const TikTokGlyph = ({size=17}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 7.1a6.3 6.3 0 0 1-4-2.7V15a5.2 5.2 0 1 1-5.2-5.2c.4 0 .9.1 1.3.2v3a2.4 2.4 0 1 0 1.7 2.3V2h3a6.3 6.3 0 0 0 3.2 3.3v1.8Z"/></svg>;
-const SOCIALS = [
-  { label: 'WhatsApp', href: 'https://wa.me/2349157428112?text=Hello%20Plannet%20World%20Entertainment!%20I%20have%20a%20question%20about%20Soakers%20Splash%20Squad%202027%20tickets.', Icon: WhatsAppGlyph },
-  { label: 'Call', href: 'tel:07057642817', Icon: Phone },
-  { label: 'TikTok', href: import.meta.env.VITE_ORGANIZER_TIKTOK_URL || 'https://www.tiktok.com/@ibukun_oluwa70', Icon: TikTokGlyph },
-  { label: 'Instagram', href: import.meta.env.VITE_ORGANIZER_INSTAGRAM_URL || 'https://www.instagram.com/ibukun_oluwa70/', Icon: InstagramGlyph },
+const money = n => `₦${Number(n || 0).toLocaleString('en-NG')}`;
+const socials = [
+  ['TikTok', import.meta.env.VITE_ORGANIZER_TIKTOK_URL || 'https://www.tiktok.com/@ibukun_oluwa70'],
+  ['Instagram', import.meta.env.VITE_ORGANIZER_INSTAGRAM_URL || 'https://www.instagram.com/ibukun_oluwa70/']
 ];
-const money = (n) => `₦${n.toLocaleString('en-NG')}`;
-const target = new Date('2027-01-01T22:00:00+01:00').getTime();
+const eventHref = slug => `/events/${encodeURIComponent(slug)}`;
 
-function App() {
-  const [remaining, setRemaining] = useState(184);
-  const [qty, setQty] = useState(1);
-  const [tier, setTier] = useState('early');
-  const [clock, setClock] = useState(Date.now());
-  const [faq, setFaq] = useState(0);
-  const [copied, setCopied] = useState(false);
-  const [contactOpen, setContactOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [passOpen, setPassOpen] = useState(false);
-  const [passEmail, setPassEmail] = useState('');
-  const [passReference, setPassReference] = useState(new URLSearchParams(window.location.search).get('reference') || '');
-  const [passes, setPasses] = useState(null);
-  const [lookupBusy, setLookupBusy] = useState(false);
-  const [showMobileCta, setShowMobileCta] = useState(false);
-  const [email, setEmail] = useState('');
-  const [guest, setGuest] = useState('');
-  const [phone, setPhone] = useState('');
-  const unit = tier === 'early' ? 3000 : 5000;
-  const subtotal = unit * qty;
-  const fee = Math.min(2000, Math.ceil(((subtotal + 100) / (1 - 0.015)) - subtotal));
-  const total = subtotal + fee;
-  const time = useMemo(() => {
-    const secs = Math.max(0, Math.floor((target - clock) / 1000));
-    return [Math.floor(secs / 86400), Math.floor((secs % 86400) / 3600), Math.floor((secs % 3600) / 60), secs % 60];
-  }, [clock]);
-  useEffect(() => { const id = setInterval(() => setClock(Date.now()), 1000); return () => clearInterval(id); }, []);
-  useEffect(() => { let active=true; const refresh=()=>fetch('/api/inventory').then(r=>r.json()).then(d=>{if(active&&Number.isInteger(d.remaining))setRemaining(d.remaining)}).catch(()=>{}); refresh(); const id=setInterval(refresh,30000); return()=>{active=false;clearInterval(id)}; }, []);
-  useEffect(() => { const target=document.getElementById('tickets'); if(!target)return; const observer=new IntersectionObserver(([entry])=>setShowMobileCta(!entry.isIntersecting),{threshold:.12}); observer.observe(target); return()=>observer.disconnect(); }, []);
-  useEffect(() => { if (remaining === 0 && tier === 'early') { setTier('regular'); setQty(1); } }, [remaining, tier]);
-  const chooseTier = (which) => { setTier(which); setQty(1); setError(''); };
-  const changeQty = (delta) => setQty((v) => Math.max(1, Math.min(10, tier === 'early' ? Math.min(remaining, v + delta) : v + delta)));
-  async function checkout(e) {
-    e.preventDefault(); setError(''); setBusy(true);
-    try {
-      const res = await fetch('/api/checkout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, fullName: guest, phone, quantity: qty, tier }) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Checkout could not start. Please try again.');
-      if (data.authorization_url) window.location.assign(data.authorization_url);
-      else throw new Error('Payment link was not returned. Please contact the organizer.');
-    } catch (err) { setError(err.message || 'Unable to start checkout. Please contact the organizer.'); } finally { setBusy(false); }
-  }
-  async function copyAddress() { await navigator.clipboard?.writeText('Igbekon, Ado-Odo, Ota, Ogun State'); setCopied(true); setTimeout(() => setCopied(false), 1800); }
-  async function lookupPasses(e) { e.preventDefault(); setError(''); setLookupBusy(true); try { const r=await fetch('/api/passes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:passEmail,reference:passReference})}); const d=await r.json(); if(!r.ok)throw new Error(d.error); setPasses(d.passes); } catch(err){setError(err.message||'Pass lookup is temporarily unavailable.')} finally{setLookupBusy(false)} }
-  const socials = (className='') => <div className={`socials ${className}`}>{SOCIALS.map(({label,href,Icon}) => <a key={label} href={href} aria-label={label} title={label}><Icon size={17}/></a>)}</div>;
-
-  return <>
-    <div className="ambient ambient-a"/><div className="ambient ambient-b"/><div className="ambient ambient-c"/>
-    <header className="nav-wrap"><nav className="nav shell">
-      <a className="brand" href="#top" aria-label="Soakers Splash Squad home"><span className="brand-mark"><Waves size={22}/></span><span><b>SOAKERS <i>'27</i></b><small>PLANNET WORLD ENTERTAINMENT</small></span></a>
-      <div className="nav-mid"><span className="remaining"><span className="pulse-dot"/><Flame size={14}/>{remaining ? `${remaining} / 200 EARLY BIRD LEFT` : 'EARLY BIRD SOLD OUT'}</span></div>
-      <div className="nav-actions"><button className="nav-link" onClick={() => setPassOpen(true)}><Ticket size={15}/> My Pass</button><a className="button button-small" href="#tickets">Get Tickets <ArrowRight size={15}/></a></div>
-    </nav></header>
-
-    <main id="top">
-      <section className="hero shell">
-        <div className="hero-copy">
-          <div className="eyebrow"><span className="eyebrow-line"/> PLANNET WORLD ENTERTAINMENT PRESENTS</div>
-          <div className="date-pill"><span className="date-spark"/> JAN 1, 2027 <span>•</span> 10PM TILL DAWN <span>•</span> ADO-ODO, OTA</div>
-          <h1>SOAKERS<br/><span className="title-gradient">SPLASH SQUAD</span><em>2027</em></h1>
-          <p className="tagline">“Same Vibes, <span>Bigger Moves!</span>”</p>
-          <p className="intro">The year begins at the water’s edge. A night of poolside heat, electric sound and memories that stay with you till sunrise.</p>
-          <div className="countdown" aria-label="Countdown to event">{['DAYS','HRS','MINS','SECS'].map((label,i)=><div className="time-cell" key={label}><strong>{String(time[i]).padStart(2,'0')}</strong><small>{label}</small></div>)}</div>
-          <div className="hero-actions"><a href="#tickets" className="button button-primary">Grab Your Pass <ArrowRight size={17}/></a><button className="button button-ghost" onClick={() => setPassOpen(true)}>Retrieve Pass <QrCode size={16}/></button></div>
-          {socials('hero-socials')}
-        </div>
-        <div className="hero-art" aria-label="An abstract poolside night scene for Soakers Splash Squad 2027">
-          <div className="art-halo"/><div className="night-scene"><div className="scene-topline"><span>PLANNET WORLD ENTERTAINMENT</span><span>01 — 01 — 27</span></div>
-            <div className="scene-sky"><span className="scene-moon"/><span className="scene-star star-one"/><span className="scene-star star-two"/><span className="scene-star star-three"/><span className="scene-palm palm-left">✳</span><span className="scene-palm palm-right">✳</span><div className="scene-headline"><small>NEW YEAR · POOL PARTY</small><b>SAME VIBES.<br/><i>BIGGER MOVES.</i></b><span><Sparkles size={13}/> FRIDAY · 10PM TILL DAWN</span></div></div>
-            <div className="scene-pool"><span className="pool-shimmer shimmer-one"/><span className="pool-shimmer shimmer-two"/><span className="pool-shimmer shimmer-three"/><span className="pool-ripple ripple-one"/><span className="pool-ripple ripple-two"/><span className="pool-ripple ripple-three"/><b>SOAKERS SPLASH SQUAD <i>2027</i></b></div>
-            <div className="scene-bottom"><span><MapPin size={12}/> IGBEKON · ADO-ODO · OTA</span><span className="scene-vip"><Sparkles size={12}/> THE VIP NEW YEAR EXPERIENCE</span></div>
-          </div><span className="art-index">01 <i>/</i> 27</span>
-          <div className="vertical-note">MAKE A SPLASH · MAKE A MEMORY</div>
-        </div>
-        <a className="scroll-cue" href="#tickets"><span>SCROLL TO THE GOOD PART</span><ArrowDown size={15}/></a>
-      </section>
-
-      <section className="ticket-section section-pad" id="tickets"><div className="shell">
-        <div className="section-head"><div><div className="eyebrow"><span className="eyebrow-line"/> YOUR NIGHT STARTS HERE</div><h2>Choose your <span>entry.</span></h2></div><p>One night. One pool. Your people.<br/>Lock in your place before the countdown ends.</p></div>
-        <div className="ticket-layout">
-          <form id="checkoutForm" className="booking-form" onSubmit={checkout}>
-            <div className="step-label"><span>01</span> SELECT YOUR PASS <i/></div>
-            <div className="tier-list">
-              <button type="button" className={`tier-card early-card ${tier==='early'?'selected':''} ${remaining===0?'sold':''}`} onClick={()=>remaining && chooseTier('early')} disabled={!remaining}>
-                <span className="tier-top"><span className="tier-tag">FIRST WAVE</span>{remaining ? <span className="tier-availability"><span className="live-dot"/> LIMITED RELEASE</span> : <span className="sold-tag">SOLD OUT</span>}</span>
-                <span className="tier-name">Early Bird <b>{remaining ? '01' : '—'}</b></span><span className="tier-price">₦3,000 <small>/ person</small></span>
-                <span className="progress-track"><i style={{width:`${(200-remaining)/2}%`}}/></span><span className="tier-foot">{200-remaining} / 200 CLAIMED <span>{remaining} LEFT</span></span><span className="select-ring">{tier==='early'&&<Check size={14}/>}</span>
-              </button>
-              <button type="button" className={`tier-card regular-card ${tier==='regular'?'selected':''}`} onClick={()=>chooseTier('regular')}>
-                <span className="tier-top"><span className="tier-tag">GENERAL ENTRY</span><span className="tier-availability">ON SALE</span></span>
-                <span className="tier-name">Regular <b>02</b></span><span className="tier-price">₦5,000 <small>/ person</small></span><span className="regular-note">Your place at the water’s edge.</span>
-                <span className="select-ring">{tier==='regular'&&<Check size={14}/>}</span>
-              </button>
-            </div>
-            <div className="quantity-row"><div><b>How many are coming?</b><small>Bring your whole splash squad.</small></div><div className="stepper"><button type="button" onClick={()=>changeQty(-1)} aria-label="Decrease quantity"><Minus size={15}/></button><strong>{qty}</strong><button type="button" onClick={()=>changeQty(1)} aria-label="Increase quantity" disabled={qty >= (tier==='early'?Math.min(10,remaining):10)}><Plus size={15}/></button></div></div>
-            <div className="step-label guest-step"><span>02</span> WHO’S ON THE LIST? <i/></div>
-            <div className="input-grid"><label className="field wide">FULL NAME<input required autoComplete="name" value={guest} onChange={e=>setGuest(e.target.value)} placeholder="Name on your pass"/></label><label className="field">EMAIL ADDRESS<input required type="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label><label className="field">WHATSAPP NUMBER<input required type="tel" autoComplete="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="+234 800 000 0000"/></label></div>
-            <p className="secure-note"><span/> Secure checkout powered by Paystack. Retrieve your pass with your receipt reference.</p>
-          </form>
-          <aside className="receipt-wrap"><div className="receipt-card"><div className="receipt-top"><div><span className="micro">YOUR NIGHT, YOUR WAY</span><h3>Order <span>summary</span></h3></div><span className="receipt-icon"><Ticket size={17}/></span></div>
-            <div className="receipt-event"><div className="mini-mark"><Waves size={18}/></div><div><b>SOAKERS SPLASH SQUAD '27</b><small>JAN 01 · 10PM TILL DAWN</small></div><span className="receipt-qty">× {qty}</span></div>
-            <div className="receipt-lines"><div><span>Ticket Price <i>{tier==='early'?'Early Bird':'Regular'} × {qty}</i></span><b>{money(subtotal)}</b></div><div><span>Bank Charges</span><b>{money(fee)}</b></div></div>
-            <div className="receipt-total"><span>TOTAL</span><strong>{money(total)}</strong></div>
-            {error&&<div className="error-box" role="alert">{error}</div>}
-            <button className="button pay-button" type="submit" form="checkoutForm" disabled={busy}>{busy?<><LoaderCircle className="spin" size={18}/> Preparing secure checkout…</>:<>Pay {money(total)} Now <ArrowRight size={18}/></>}</button>
-            <div className="pay-trust"><span><Check size={13}/> Instant confirmation</span><span>🔒 SSL secured</span></div>
-            <div className="receipt-perforation"/><div className="receipt-bottom"><span>PLANNET WORLD ENTERTAINMENT</span><span>NO REFUNDS · ALL VIBES</span></div>
-          </div><div className="secure-stamp"><QrCode size={17}/><span>YOUR ENTRY<br/><b>IS SECURE</b></span><i/></div></aside>
-        </div>
-      </div></section>
-
-      <section className="experience section-pad"><div className="shell"><div className="section-head experience-head"><div><div className="eyebrow"><span className="eyebrow-line"/> THE REASON WE’RE HERE</div><h2>Not just a party.<br/><span>A whole feeling.</span></h2></div><p>When the clock hits ten, leave the ordinary at the door.</p></div>
-        <div className="bento">
-          <article className="bento-card pool-card"><div className="bento-orb"><Waves size={27}/></div><span className="card-kicker">01 / WATER</span><h3>Poolside<br/><em>after dark.</em></h3><p>Cool water. Warm bodies. That first midnight splash hits different.</p><div className="pool-rings"/></article>
-          <article className="bento-card sound-card"><div className="equalizer"><i/><i/><i/><i/><i/><i/><i/></div><span className="card-kicker">02 / SOUND</span><h3>10PM till<br/><em>the sun finds us.</em></h3><p>Non-stop sound. No early exits.</p><span className="sound-time">22:00 <b>—</b> DAWN</span></article>
-          <article className="bento-card place-card"><span className="card-kicker">03 / THE PLACE</span><div className="map-orbit"><MapPin size={27}/><span/></div><h3>Igbekon,<br/><em>Ado-Odo, Ota.</em></h3><button className="copy-address" onClick={copyAddress}>{copied?<><Check size={14}/> Address copied</>:<>Copy address <Copy size={14}/></>}</button></article>
-          <article className="bento-card entry-card"><div className="qr-decoration"><QrCode size={95} strokeWidth={1}/></div><span className="card-kicker">04 / ENTRY</span><h3>Your pass.<br/><em>Your way in.</em></h3><p>Every ticket comes with its own secure QR. Scan in, splash out.</p><span className="entry-chip"><Zap size={12}/> CRYPTOGRAPHIC QR ENTRY</span></article>
-        </div>
-      </div></section>
-
-      <section className="faq-section section-pad"><div className="shell faq-layout"><div><div className="eyebrow"><span className="eyebrow-line"/> BEFORE YOU DIVE IN</div><h2>A few things<br/><span>to know.</span></h2><p className="faq-help">Still wondering? Our crew is one tap away.</p><a className="text-link" href={SOCIALS[0].href}>Ask us on WhatsApp <ArrowRight size={15}/></a></div>
-        <div className="faq-list">{[
-          ['How do I get my ticket after payment?', 'Use the order reference on your Paystack receipt together with the checkout email in My Pass to retrieve your signed QR ticket.'],
-          ['Can I buy passes for my friends?', 'Absolutely. Choose the number of passes you need and enter the lead guest details. Each paid pass is valid for one person.'],
-          ['What happens at the gate?', 'Show your QR pass at entry. Our team scans each code once to get your squad checked in and ready to splash.'],
-          ['Can I get a refund?', 'All ticket sales are final. If you have a question about your order, reach out to the organizer before event night.']
-        ].map(([q,a],i)=><button className={`faq-item ${faq===i?'open':''}`} key={q} onClick={()=>setFaq(faq===i?-1:i)}><span className="faq-num">0{i+1}</span><span className="faq-content"><b>{q}</b>{faq===i&&<small>{a}</small>}</span><ChevronDown size={17}/></button>)}</div>
-      </div></section>
-    </main>
-
-    <footer className="footer"><div className="shell footer-main"><a className="brand" href="#top"><span className="brand-mark"><Waves size={22}/></span><span><b>SOAKERS <i>'27</i></b><small>PLANNET WORLD ENTERTAINMENT</small></span></a><p>Same Vibes.<br/><b>Bigger Moves.</b></p>{socials('footer-socials')}</div><div className="shell footer-bottom"><span>© 2027 PLANNET WORLD ENTERTAINMENT</span><span>IGBEKON, ADO-ODO, OTA · OGUN STATE</span><a href="#top">BACK TO TOP ↑</a></div></footer>
-
-    <div className={`contact-dock ${contactOpen?'contact-open':''}`}><button className="dock-toggle" onClick={()=>setContactOpen(!contactOpen)} aria-label="Contact the organizer">{contactOpen?<X size={19}/>:<MessageCircle size={19}/>}</button><span className="dock-label">TALK TO THE CREW</span><div className="dock-items">{SOCIALS.map(({label,href,Icon})=><a key={label} href={href} aria-label={label} title={label}><Icon size={17}/></a>)}</div></div>
-    {showMobileCta&&<div className="mobile-sticky"><span>FROM <b>{money(remaining?3000:5000)}</b></span><a href="#tickets">Get your pass <ArrowRight size={16}/></a></div>}
-
-    {passOpen&&<div className="modal-backdrop" onClick={()=>{setPassOpen(false);setError('');setPasses(null)}}><div className="modal pass-modal" onClick={e=>e.stopPropagation()}><button className="modal-close" onClick={()=>{setPassOpen(false);setError('');setPasses(null)}} aria-label="Close"><X size={21}/></button><span className="modal-icon"><Ticket size={21}/></span><span className="micro">YOUR NIGHT IS WAITING</span><h2>Find your <span>pass.</span></h2><p>Enter the order reference from your Paystack receipt and the checkout email.</p><form onSubmit={lookupPasses}><label className="field">ORDER REFERENCE<input required value={passReference} onChange={e=>setPassReference(e.target.value.toUpperCase())} placeholder="SSS-XXXXXXXXXXXX"/></label><label className="field">EMAIL ADDRESS<input type="email" required value={passEmail} onChange={e=>setPassEmail(e.target.value)} placeholder="you@example.com"/></label><button className="button button-primary" disabled={lookupBusy}>{lookupBusy?'Searching…':<>Find my pass <ArrowRight size={16}/></>}</button>{error&&<span className="lookup-note">{error}</span>}</form>{passes&&<div className="pass-results">{passes.length?passes.map(pass=><div className="pass-result" key={pass.code}><QRCodeSVG value={pass.qr_token} size={66} bgColor="#ffffff" fgColor="#07111e" level="M"/><span><b>{pass.code}</b><small>{pass.guest_name} · {pass.tier==='early'?'Early Bird':'Regular'} entry</small></span><span className="pass-valid">VALID</span></div>):<p>No valid passes found for that reference and email.</p>}</div>}<a className="text-link" href={SOCIALS[0].href}>Need help? Message the crew</a></div></div>}
-  </>;
+function Shell({ children }) {
+  return <><header className="platform-nav"><a className="platform-brand" href="/"><span className="brand-mark"><Waves size={20}/></span><span><b>PLANNET WORLD</b><small>ENTERTAINMENT</small></span></a><nav><a href="/#events">Events</a><a href="/admin">Admin</a></nav></header>{children}<footer className="platform-footer"><span>© PLANNET WORLD ENTERTAINMENT</span><div>{socials.map(([label,url])=><a key={label} href={url} target="_blank" rel="noreferrer">{label} <ExternalLink size={13}/></a>)}</div></footer></>;
 }
-createRoot(document.getElementById('root')).render(<App/>);
+
+function PhaseBadge({ event }) {
+  const s = event.stats || {};
+  return s.active_phase === 'Early Bird' && s.early_bird_remaining > 0
+    ? <span className="phase-badge">Early Bird — {money(event.early_bird_price)} <small>({s.early_bird_remaining} of {event.early_bird_limit} left)</small></span>
+    : <span className="phase-badge regular">Regular — {money(event.regular_price)}</span>;
+}
+
+function EventCard({ event }) {
+  return <article className="event-card">
+    <a className="event-art" href={eventHref(event.slug)} style={event.banner_url ? { backgroundImage: `linear-gradient(180deg,transparent,#06101d),url("${event.banner_url}")` } : undefined}>
+      <span className="event-art-mark"><Waves size={24}/></span><span className="event-art-date"><CalendarDays size={14}/> {event.event_date}</span>
+    </a>
+    <div className="event-card-content"><span className="event-eyebrow">PLANNET WORLD PRESENTS</span><h3>{event.title}</h3>{event.tagline && <p className="event-tagline">{event.tagline}</p>}<div className="event-meta"><span><MapPin size={15}/>{event.venue}</span></div><PhaseBadge event={event}/><a className="platform-button" href={eventHref(event.slug)}>Get Ticket <ArrowRight size={16}/></a></div>
+  </article>;
+}
+
+function HomePage() {
+  const [events, setEvents] = useState([]); const [error, setError] = useState('');
+  useEffect(() => { let live = true; const load = () => fetch('/api/events').then(r => r.json()).then(d => { if (!live) return; if (!d.events) throw new Error(d.error || 'Events could not load.'); setEvents(d.events); setError(''); }).catch(e => live && setError(e.message)); load(); const timer = setInterval(load, 30000); return () => { live = false; clearInterval(timer); }; }, []);
+  return <Shell><main className="platform-main">
+    <section className="platform-hero"><div className="platform-hero-orb"/><span className="event-eyebrow">LIVE ENTERTAINMENT · UNFORGETTABLE NIGHTS</span><h1>Your next<br/><em>great night.</em></h1><p>Find your people, pick your event, and book your place with Plannet World Entertainment.</p><a className="platform-button" href="#events">Explore events <ArrowRight size={16}/></a></section>
+    <section className="platform-events" id="events"><div className="platform-section-head"><div><span className="event-eyebrow">WHAT’S ON</span><h2>Upcoming events</h2></div><span className="live-label"><i/> Live ticket availability</span></div>
+      {error && <div className="platform-error">{error}</div>}{!events.length && !error && <div className="platform-loading"><LoaderCircle className="spin"/> Loading events…</div>}
+      <div className="events-grid">{events.map(event => <EventCard event={event} key={event.id}/>)}</div>
+    </section>
+  </main></Shell>;
+}
+
+function EventPage({ slug }) {
+  const [event,setEvent]=useState(null); const [qty,setQty]=useState(1); const [fullName,setFullName]=useState(''); const [email,setEmail]=useState(''); const [phone,setPhone]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState(''); const [passesOpen,setPassesOpen]=useState(false); const [passEmail,setPassEmail]=useState(''); const [reference,setReference]=useState(new URLSearchParams(location.search).get('reference')||''); const [passes,setPasses]=useState([]); const [passBusy,setPassBusy]=useState(false);
+  useEffect(()=>{let live=true; const load=()=>fetch(`/api/events/${encodeURIComponent(slug)}`).then(r=>r.json()).then(d=>{if(!live)return;if(!d.event)throw new Error(d.error||'Event not found.');setEvent(d.event);setError('');}).catch(e=>live&&setError(e.message));load();const timer=setInterval(load,20000);return()=>{live=false;clearInterval(timer);};},[slug]);
+  const phase=event?.stats?.active_phase||'Early Bird'; const unit=event?(phase==='Early Bird'?event.early_bird_price:event.regular_price):0; const subtotal=unit*qty; const fee=Math.min(2000,Math.ceil(((subtotal+100)/(1-.015))-subtotal));
+  async function checkout(e){e.preventDefault();setBusy(true);setError('');try{const r=await fetch('/api/checkout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({event_id:event.id,fullName,email,phone,quantity:qty})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Checkout could not start.');location.assign(d.authorization_url);}catch(err){setError(err.message);fetch(`/api/events/${encodeURIComponent(slug)}`).then(r=>r.json()).then(d=>d.event&&setEvent(d.event)).catch(()=>{});}finally{setBusy(false);}}
+  async function lookupPasses(e){e.preventDefault();setPassBusy(true);setError('');try{const r=await fetch('/api/passes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:passEmail,reference})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Pass lookup failed.');setPasses(d.passes||[]);}catch(err){setError(err.message);}finally{setPassBusy(false);}}
+  return <Shell><main className="platform-main event-page"><a className="back-link" href="/#events"><ArrowLeft size={15}/> All events</a>
+    {event ? <><section className="event-detail-hero" style={event.banner_url?{backgroundImage:`linear-gradient(90deg,rgba(3,10,20,.97),rgba(3,10,20,.65)),url("${event.banner_url}")`}:undefined}><span className="event-eyebrow">PLANNET WORLD ENTERTAINMENT PRESENTS</span><h1>{event.title}</h1>{event.tagline&&<p className="event-tagline">{event.tagline}</p>}<p>{event.description}</p><div className="event-detail-meta"><span><CalendarDays size={16}/>{event.event_date}</span><span><MapPin size={16}/>{event.venue}</span></div><PhaseBadge event={event}/></section>
+    <section className="checkout-panel"><div><span className="event-eyebrow">SECURE CHECKOUT</span><h2>Save your spot.</h2><p>Ticket pricing updates automatically as the Early Bird allocation sells out.</p><button className="text-button" onClick={()=>setPassesOpen(true)}>Already paid? Retrieve your pass</button></div><form onSubmit={checkout} className="platform-form">
+      <label>Full name<input required autoComplete="name" value={fullName} onChange={e=>setFullName(e.target.value)} maxLength="120"/></label><label>Email<input required type="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} maxLength="254"/></label><label>WhatsApp number<input required type="tel" autoComplete="tel" value={phone} onChange={e=>setPhone(e.target.value)} maxLength="32"/></label>
+      <label>Tickets<select value={qty} onChange={e=>setQty(Number(e.target.value))}>{Array.from({length:10},(_,i)=><option key={i+1} value={i+1}>{i+1}</option>)}</select></label>
+      <div className="checkout-summary"><span>{phase} × {qty}</span><b>{money(subtotal)}</b><span>Bank charges</span><b>{money(fee)}</b><strong>Total</strong><strong>{money(subtotal+fee)}</strong></div>
+      {error&&<div className="platform-error" role="alert">{error}</div>}<button className="platform-button full" disabled={busy}>{busy?<><LoaderCircle className="spin"/> Connecting to Paystack…</>:<>Pay {money(subtotal+fee)} <ArrowRight size={16}/></>}</button><small className="checkout-safe"><ShieldCheck size={14}/> Payment secured by Paystack</small>
+    </form></section></>:<div className="platform-loading">{error||'Loading event…'}</div>}
+    {passesOpen&&<div className="platform-modal-backdrop" onClick={()=>{setPassesOpen(false);setPasses([])}}><section className="platform-modal" onClick={e=>e.stopPropagation()}><button className="platform-modal-close" onClick={()=>{setPassesOpen(false);setPasses([])}} aria-label="Close"><X/></button><span className="event-eyebrow">TICKET LOOKUP</span><h2>Retrieve your pass</h2><form className="platform-form" onSubmit={lookupPasses}><label>Receipt email<input required type="email" value={passEmail} onChange={e=>setPassEmail(e.target.value)}/></label><label>Paystack reference<input required value={reference} onChange={e=>setReference(e.target.value)}/></label><button className="platform-button full" disabled={passBusy}>{passBusy?'Looking up…':'Find my pass'}</button></form>{passes.length>0&&<div className="pass-results">{passes.map(pass=><div key={pass.code}><b>{pass.guest_name}</b><small>{pass.code} · {pass.ticket_phase||pass.tier}</small><QRCodeSVG value={pass.qr_token} size={150}/></div>)}</div>}{error&&<div className="platform-error">{error}</div>}</section></div>}
+  </main></Shell>;
+}
+
+const blankEvent={title:'',slug:'',tagline:'',description:'',event_date:'',venue:'',banner_url:'',early_bird_price:3000,early_bird_limit:200,regular_price:'',gate_pin:'',is_active:true};
+function AdminPage(){
+  const [pin,setPin]=useState(()=>sessionStorage.getItem('plannet-admin-pin')||''); const [authenticated,setAuthenticated]=useState(false); const [events,setEvents]=useState([]); const [form,setForm]=useState(blankEvent); const [editing,setEditing]=useState(''); const [loading,setLoading]=useState(false); const [error,setError]=useState(''); const [notice,setNotice]=useState('');
+  async function load(){setLoading(true);setError('');try{const r=await fetch('/api/admin/events',{headers:{'x-admin-pin':pin}});const d=await r.json();if(!r.ok)throw new Error(d.error||'Admin access denied.');setEvents(d.events||[]);setAuthenticated(true);sessionStorage.setItem('plannet-admin-pin',pin);}catch(e){setAuthenticated(false);sessionStorage.removeItem('plannet-admin-pin');setError(e.message);}finally{setLoading(false);}}
+  useEffect(()=>{if(pin)load();},[]);
+  useEffect(()=>{if(!authenticated)return;const timer=setInterval(()=>load(),20000);return()=>clearInterval(timer);},[authenticated]);
+  function beginEdit(event){setEditing(event.id);setForm({...event,regular_price:event.regular_price,tagline:event.tagline||'',description:event.description||'',banner_url:event.banner_url||''});window.scrollTo({top:0,behavior:'smooth'});}
+  function resetForm(){setEditing('');setForm(blankEvent);setError('');setNotice('');}
+  async function save(e){e.preventDefault();setLoading(true);setError('');setNotice('');try{const r=await fetch(editing?`/api/admin/events/${editing}`:'/api/admin/events',{method:editing?'PUT':'POST',headers:{'content-type':'application/json','x-admin-pin':pin},body:JSON.stringify({...form,slug:form.slug||form.title})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not save event.');const message=editing?'Event updated.':'Event created.';resetForm();await load();setNotice(message);}catch(err){setError(err.message);}finally{setLoading(false);}}
+  async function toggle(event){setLoading(true);setError('');try{const r=await fetch(`/api/admin/events/${event.id}`,{method:'PUT',headers:{'content-type':'application/json','x-admin-pin':pin},body:JSON.stringify({is_active:!event.is_active})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not update event.');await load();}catch(e){setError(e.message);}finally{setLoading(false);}}
+  const set=(key,value)=>setForm(f=>({...f,[key]:value}));
+  return <Shell><main className="platform-main admin-page"><a className="back-link" href="/"><ArrowLeft size={15}/> Public events</a><section className="admin-heading"><div><span className="event-eyebrow">PLANNET WORLD · MANAGEMENT</span><h1>Event dashboard</h1><p>Create events, manage ticket sales, and keep pricing current.</p></div><ShieldCheck size={36}/></section>
+    {!authenticated?<form className="admin-login" onSubmit={e=>{e.preventDefault();load();}}><h2>Admin sign in</h2><p>Enter the admin PIN configured in Cloudflare Pages.</p><label>Admin PIN<input type="password" required value={pin} onChange={e=>setPin(e.target.value)} autoComplete="current-password"/></label>{error&&<div className="platform-error">{error}</div>}<button className="platform-button full" disabled={loading}>{loading?'Verifying…':'Open dashboard'}</button></form>:<>
+      <div className="admin-toolbar"><div><b>{events.length} events</b><small>Sales stats refresh automatically every 20 seconds.</small></div><button className="button button-ghost" onClick={load} disabled={loading}>Refresh stats</button><button className="platform-button" onClick={resetForm}><Plus size={16}/> New event</button><button className="text-button" onClick={()=>{sessionStorage.removeItem('plannet-admin-pin');setAuthenticated(false);setPin('');}}>Sign out</button></div>
+      {notice&&<div className="platform-success"><Check size={16}/>{notice}</div>}{error&&<div className="platform-error">{error}</div>}
+      <div className="admin-grid">{events.map(event=><article className="admin-event" key={event.id}><div className="admin-event-top"><div><span className={`admin-status ${event.is_active?'active':''}`}>{event.is_active?'ACTIVE':'INACTIVE'}</span><h2>{event.title}</h2><p>{event.event_date} · {event.venue}</p></div><PhaseBadge event={event}/></div><div className="admin-stats"><div><b>{Math.min(event.stats.paid_count,event.early_bird_limit)} / {event.early_bird_limit}</b><small>Early Bird sold</small></div><div><b>{Math.max(0,event.stats.paid_count-event.early_bird_limit)}</b><small>Regular sold</small></div><div><b>{event.stats.paid_count}</b><small>Total paid</small></div></div><div className="admin-event-actions"><button className="button button-ghost" onClick={()=>beginEdit(event)}>Edit event</button><button className="button button-ghost" onClick={()=>toggle(event)}>{event.is_active?'Deactivate':'Activate'}</button><a className="button button-ghost" href={eventHref(event.slug)} target="_blank" rel="noreferrer">View page <ExternalLink size={14}/></a></div></article>)}</div>
+      <section className="admin-editor"><div className="platform-section-head"><div><span className="event-eyebrow">EVENT DETAILS</span><h2>{editing?'Edit event':'Create an event'}</h2></div>{editing&&<button className="text-button" onClick={resetForm}>Cancel edit</button>}</div><form className="admin-form" onSubmit={save}>
+        <label>Title<input required value={form.title} onChange={e=>set('title',e.target.value)} onBlur={()=>!form.slug&&set('slug',e.target.value.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,''))}/></label><label>Slug<input required value={form.slug} onChange={e=>set('slug',e.target.value.toLowerCase().trim().replace(/[^a-z0-9-]+/g,'-'))}/><small>Generated from the title. Used in the public event URL.</small></label><label>Date<input required value={form.event_date} onChange={e=>set('event_date',e.target.value)} placeholder="Saturday, 15 August 2027 · 8 PM"/></label><label>Venue<input required value={form.venue} onChange={e=>set('venue',e.target.value)}/></label><label>Tagline<input value={form.tagline} onChange={e=>set('tagline',e.target.value)}/></label><label>Banner image URL (optional)<input type="url" value={form.banner_url} onChange={e=>set('banner_url',e.target.value)} placeholder="https://…"/><small>External HTTPS image only. Images are not uploaded to Supabase.</small></label><label className="admin-wide">Description<textarea rows="4" value={form.description} onChange={e=>set('description',e.target.value)}/></label><label>Early Bird Price (₦)<input type="number" min="0" step="1" value={form.early_bird_price} onChange={e=>set('early_bird_price',e.target.value)}/></label><label>Early Bird Limit<input type="number" min="0" step="1" value={form.early_bird_limit} onChange={e=>set('early_bird_limit',e.target.value)}/></label><label>Regular Price (₦)<input required type="number" min="1" step="1" value={form.regular_price} onChange={e=>set('regular_price',e.target.value)}/></label><label>Event Gate PIN<input required type="password" value={form.gate_pin} onChange={e=>set('gate_pin',e.target.value)}/></label><label className="admin-toggle"><input type="checkbox" checked={form.is_active} onChange={e=>set('is_active',e.target.checked)}/> Active event (visible on the public site)</label><div className="admin-wide admin-submit">{error&&<div className="platform-error">{error}</div>}<button className="platform-button" disabled={loading}>{loading?<LoaderCircle className="spin"/>:<Check size={16}/>} {editing?'Save changes':'Create event'}</button></div>
+      </form></section>
+    </>}
+  </main></Shell>;
+}
+
+function App(){const path=decodeURIComponent(location.pathname);const event=path.match(/^\/events\/([^/]+)\/?$/);return path==='/admin'||path==='/admin/'?<AdminPage/>:event?<EventPage slug={event[1]}/>:<HomePage/>;}
+
+createRoot(document.getElementById('root')).render(<React.StrictMode><App/></React.StrictMode>);

@@ -1,7 +1,6 @@
 import { json, readJson, rpc, sign, timingSafeEqual } from './_shared.js';
 export async function onRequestPost({ request, env }) {
-  const host = new URL(request.url).hostname;
-  const gatePin = env.GATE_PIN || (['localhost','127.0.0.1'].includes(host) ? '2027' : '');
+  const gatePin = env.GATE_PIN || '';
   if (!gatePin || !env.QR_SIGNING_SECRET || env.QR_SIGNING_SECRET.length < 32 || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return json({ error: 'Gate check-in is not configured.' }, 503);
   try {
     const { pin, token } = await readJson(request, 2_048);
