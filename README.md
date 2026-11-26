@@ -26,6 +26,7 @@ Add server values in **Settings → Variables and Secrets**. Store credentials a
 | `BREVO_SENDER_EMAIL` | Verified sender address; production value: `tickets@planetworldentetainment.com.ng`. |
 | `BREVO_SENDER_NAME` | Sender display name; production value: `SOAKERS SPLASH SQUAD2027`. |
 | `SITE_URL` | Public canonical site URL, without a trailing slash; production value: `https://planetworldentetainment.com.ng`. |
+| `PAYMENT_RECONCILE_SECRET` | Random secret of at least 32 characters authorizing scheduled payment reconciliation. |
 
 The only Vite variables are public social links, read from `import.meta.env`:
 
@@ -54,6 +55,17 @@ returning reference, status, quantity, ticket_phase, event_id, paid_at;
 ```
 
 Then call `https://planetworldentetainment.com.ng/api/verify-payment?reference=SSS-ABCDEF012345` in a browser to verify it with Paystack and ensure the QR tickets and email are fulfilled. A verified Paystack success can also recover a previously cancelled order; never manually mark an unverified payment as paid.
+
+### Automatic payment recovery
+
+The repository's GitHub Actions workflow calls `/api/internal/reconcile-payments` every 15 minutes and can also be run manually from the Actions tab. It checks recent pending and unsent paid orders directly with Paystack, then uses the same row-locked, idempotent Supabase fulfillment as the webhook. Unpaid transactions remain pending; amount/currency mismatches are reported for review and are never force-marked paid. The scheduled run does not need buyer references to be sent manually.
+
+To enable the schedule once, generate a random secret (at least 32 characters) and save the identical value in both places:
+
+1. Cloudflare Pages **Settings → Variables and Secrets → Production**: `PAYMENT_RECONCILE_SECRET`.
+2. GitHub repository **Settings → Secrets and variables → Actions → New repository secret**: `PAYMENT_RECONCILE_SECRET`.
+
+Then push the workflow to the default branch and run **Actions → Reconcile Paystack payments → Run workflow** once to verify the setup. The scheduled job will fail visibly if the secret is missing or if a payment/email needs attention. GitHub may delay scheduled runs during heavy load, while the Paystack webhook and checkout callback continue to confirm payments immediately.
 
 ## Routes
 

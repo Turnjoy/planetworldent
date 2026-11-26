@@ -15,6 +15,7 @@ import { onRequestGet as verifyPaymentGet } from '../functions/api/verify-paymen
 import { onRequestGet as ticketQrGet } from '../functions/api/ticket-qr.js';
 import { onRequestGet as verifyTicketGet } from '../functions/api/verify-ticket.js';
 import { onRequestPost as adminResendTicketEmailPost } from '../functions/api/admin/resend-ticket-email.js';
+import { onRequestPost as reconcilePaymentsPost } from '../functions/api/internal/reconcile-payments.js';
 import { sign } from '../functions/api/_shared.js';
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
@@ -283,5 +284,25 @@ test('ticket verification checks the signed token against a paid order and ticke
     assert.deepEqual(await result.json(),{valid:true,status:'VALID',ticket_type:'Early Bird',buyer_name:'Ada Guest',quantity:2,ticket_code:code,event:{title:event.title,event_date:event.event_date,venue:event.venue}});
     const forged=await verifyTicketGet({request:new Request(url.replace(sig,'0'.repeat(64))),env});
     assert.deepEqual(await forged.json(),{valid:false,status:'INVALID'});
+  });
+});
+
+test('scheduled reconciliation is secret-protected and idempotently fulfills verified pending payments', async () => {
+  const reconciliationEnv={...env,PAYMENT_RECONCILE_SECRET:'r'.repeat(64),BREVO_API_KEY:'brevo-test-key'};
+  const unauthorized=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST'),env:reconciliationEnv});
+  assert.equal(unauthorized.status,401);
+  const calls=[];
+  await withFetch(async (url,init={})=>{
+    const target=String(url);calls.push({target,init});
+    if(target.includes('/rest/v1/orders?'))return response([{reference:'SSS-ABCDEF012345',status:'pending',email_sent:false}]);
+    if(target.includes('/transaction/verify/'))return response({status:true,data:{status:'success',reference:'SSS-ABCDEF012345',amount:314800,currency:'NGN'}});
+    if(target.includes('/rpc/confirm_ticket_order'))return response({ok:true,idempotent:true});
+    if(target.includes('/rpc/claim_order_email'))return response({claimed:false});
+    throw new Error(`Unexpected request ${target}`);
+  },async()=>{
+    const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET}),env:reconciliationEnv});
+    assert.equal(result.status,200);
+    assert.deepEqual(await result.json(),{scanned:1,confirmed:1,unpaid:0,email_pending:0,needs_review:0,ok:true});
+    assert.equal(calls.filter(call=>call.target.includes('/rpc/confirm_ticket_order')).length,1);
   });
 });

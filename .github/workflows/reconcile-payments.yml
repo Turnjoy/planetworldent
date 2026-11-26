@@ -1,0 +1,31 @@
+name: Reconcile Paystack payments
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: payment-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify recent Paystack payments and fulfill paid orders
+        env:
+          PAYMENT_RECONCILE_SECRET: ${{ secrets.PAYMENT_RECONCILE_SECRET }}
+        run: |
+          if [ -z "$PAYMENT_RECONCILE_SECRET" ]; then
+            echo "Repository secret PAYMENT_RECONCILE_SECRET is not configured."
+            exit 1
+          fi
+          curl --silent --show-error --fail-with-body \
+            -X POST \
+            -H "x-payment-reconcile-secret: $PAYMENT_RECONCILE_SECRET" \
+            https://planetworldentetainment.com.ng/api/internal/reconcile-payments
