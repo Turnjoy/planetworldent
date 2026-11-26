@@ -11,6 +11,7 @@ import { onRequestPost as checkoutPost } from '../functions/api/checkout.js';
 import { onRequestPost as gatePost } from '../functions/api/gate.js';
 import { onRequestPost as passesPost } from '../functions/api/passes.js';
 import { onRequestPost as webhookPost } from '../functions/api/paystack-webhook.js';
+import { onRequestGet as verifyPaymentGet } from '../functions/api/verify-payment.js';
 import { sign } from '../functions/api/_shared.js';
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
@@ -133,6 +134,8 @@ test('checkout uses current server price, reserves inventory, and sends Paystack
     assert.equal(payload.subaccount, env.ORGANIZER_SUBACCOUNT_CODE);
     assert.equal(payload.metadata.event_id, event.id);
     assert.equal(payload.metadata.ticket_phase, 'Early Bird');
+    assert.equal(payload.metadata.quantity, 2);
+    assert.equal(payload.callback_url, `https://planetworldentetainment.com.ng/payment/complete?reference=${payload.reference}`);
     assert.equal(calls.find(call => call.url.includes('reserve_event_tickets')).init.method, 'POST');
   });
 });
@@ -173,18 +176,54 @@ test('pass lookup validates email/reference and returns valid tickets', async ()
   });
 });
 
-test('Paystack webhook rejects invalid signatures and confirms successful payments', async () => {
+test('Paystack webhook verifies the signature and transaction, then fulfills one order and email', async () => {
   const raw = JSON.stringify({ event: 'charge.success', data: { status: 'success', reference: 'SSS-ABCDEF012345', amount: 300000, currency: 'NGN' } });
   const invalid = await webhookPost({ request: new Request('https://tickets.test/api/paystack-webhook', { method: 'POST', body: raw, headers: { 'x-paystack-signature': 'bad' } }), env });
   assert.equal(invalid.status, 401);
   const signature = await sign(env.PAYSTACK_SECRET_KEY, raw, 'SHA-512');
-  await withFetch(async (url, init) => {
-    assert.match(String(url), /rpc\/confirm_ticket_order/);
-    assert.equal(JSON.parse(init.body).p_reference, 'SSS-ABCDEF012345');
-    return response({ ok: true });
+  const calls = [];
+  const brevoEnv = { ...env, BREVO_API_KEY: 'brevo-test-key' };
+  await withFetch(async (url, init = {}) => {
+    const target = String(url); calls.push({ target, init });
+    if (target.includes('/transaction/verify/')) return response({ status: true, data: { status: 'success', reference: 'SSS-ABCDEF012345', amount: 300000, currency: 'NGN' } });
+    if (target.includes('/rpc/confirm_ticket_order')) return response({ ok: true });
+    if (target.includes('/rpc/claim_order_email')) return response({ claimed: true });
+    if (target.includes('/rest/v1/orders?')) return response([{ reference: 'SSS-ABCDEF012345', full_name: 'Ada Guest', email: 'ada@example.test', quantity: 1, ticket_phase: 'Early Bird', event_id: event.id }]);
+    if (target.includes('/rest/v1/events?')) return response([{ title: event.title, event_date: event.event_date, venue: event.venue, slug: event.slug }]);
+    if (target.includes('/rest/v1/tickets?')) return response([{ code: 'SSS-123456', qr_token: 'signed.qr.token' }]);
+    if (target === 'https://api.brevo.com/v3/smtp/email') { assert.equal(init.headers['api-key'], 'brevo-test-key'); return response({ messageId: 'brevo-message' }, 201); }
+    if (target.includes('/rpc/finish_order_email')) { assert.equal(JSON.parse(init.body).p_sent, true); return response({ ok: true }); }
+    throw new Error(`Unexpected request ${target}`);
   }, async () => {
-    const result = await webhookPost({ request: new Request('https://tickets.test/api/paystack-webhook', { method: 'POST', body: raw, headers: { 'x-paystack-signature': signature } }), env });
+    const result = await webhookPost({ request: new Request('https://tickets.test/api/paystack-webhook', { method: 'POST', body: raw, headers: { 'x-paystack-signature': signature } }), env: brevoEnv });
     assert.equal(result.status, 200);
     assert.deepEqual(await result.json(), { received: true });
+    assert.equal(calls.filter(c => c.target.includes('/rpc/confirm_ticket_order')).length, 1);
+    assert.match(JSON.parse(calls.find(c => c.target === 'https://api.brevo.com/v3/smtp/email').init.body).sender.email, /tickets@planetworldentetainment\.com\.ng/);
+  });
+});
+
+test('payment verification endpoint rejects missing and malformed references', async () => {
+  const missing = await verifyPaymentGet({ request: new Request('https://tickets.test/api/verify-payment'), env });
+  assert.equal(missing.status, 400);
+  const invalid = await verifyPaymentGet({ request: new Request('https://tickets.test/api/verify-payment?reference=bad'), env });
+  assert.equal(invalid.status, 400);
+});
+
+test('payment verification does not resend an already claimed order email', async () => {
+  let emailCalls = 0;
+  const emailEnv = { ...env, BREVO_API_KEY: 'brevo-test-key' };
+  await withFetch(async url => {
+    const target = String(url);
+    if (target.includes('/transaction/verify/')) return response({ status: true, data: { status: 'success', reference: 'SSS-ABCDEF012345', amount: 300000, currency: 'NGN' } });
+    if (target.includes('/rpc/confirm_ticket_order')) return response({ ok: true, idempotent: true });
+    if (target.includes('/rpc/claim_order_email')) return response({ claimed: false });
+    if (target.includes('api.brevo.com')) emailCalls++;
+    throw new Error(`Unexpected request ${target}`);
+  }, async () => {
+    const result = await verifyPaymentGet({ request: new Request('https://tickets.test/api/verify-payment?reference=SSS-ABCDEF012345'), env: emailEnv });
+    assert.equal(result.status, 200);
+    assert.equal((await result.json()).email_pending, false);
+    assert.equal(emailCalls, 0);
   });
 });

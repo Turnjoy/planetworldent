@@ -22,6 +22,10 @@ Add server values in **Settings → Variables and Secrets**. Store credentials a
 | `GATE_PIN` | Gate check-in PIN and fallback for admin authentication. |
 | `ADMIN_PIN` | Admin API PIN; falls back to `GATE_PIN` when unset. |
 | `QR_SIGNING_SECRET` | Long random HMAC key used to sign ticket QR payloads. |
+| `BREVO_API_KEY` | Brevo transactional email API key. |
+| `BREVO_SENDER_EMAIL` | Verified sender address; production value: `tickets@planetworldentetainment.com.ng`. |
+| `BREVO_SENDER_NAME` | Sender display name; production value: `SOAKERS SPLASH SQUAD2027`. |
+| `SITE_URL` | Public canonical site URL, without a trailing slash; production value: `https://planetworldentetainment.com.ng`. |
 
 The only Vite variables are public social links, read from `import.meta.env`:
 
@@ -38,7 +42,18 @@ Run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL editor. It 
 
 Checkout obtains pricing on the server and reserves tickets under an event inventory lock. Early Bird pricing changes to Regular when the paid ticket count reaches the event's configured limit. Active checkout holds prevent concurrent checkouts from exceeding the Early Bird allocation. Event banners use external HTTPS URLs or built-in gradients; this project does not use Supabase Storage.
 
-Configure Paystack's webhook URL as `https://YOUR_DOMAIN/api/paystack-webhook`. The handler validates the raw signature and confirms amount and currency before issuing tickets. QR payloads use HMAC-SHA256. The gate endpoint validates and atomically redeems each ticket, with failed PIN attempts rate limited by hashed client IP.
+Configure Paystack's live webhook URL as `https://planetworldentetainment.com.ng/api/paystack-webhook`. Checkout passes `https://planetworldentetainment.com.ng/payment/complete?reference=<reference>` as the transaction callback URL. The webhook validates the raw-body `x-paystack-signature` with `PAYSTACK_SECRET_KEY`, independently verifies the transaction against Paystack, then confirms amount and currency before issuing tickets. The callback calls `/api/verify-payment` for the same fulfillment path, so webhook and browser retries are idempotent. Ticket confirmation email uses Brevo's transactional email endpoint; the SQL email claim prevents routine Paystack retries from resending it. Brevo sends from the configured sender, which must be verified in Brevo.
+
+The current `orders` table uses `status` values `pending`, `paid`, and `cancelled`; `tickets.status` uses `valid`, `used`, and `void`. Event sales are counted from `orders.status='paid'` and `orders.quantity`, so a confirmed manual status correction changes the Early Bird counter immediately. Only run the following update after verifying the transaction succeeded in Paystack; replace the reference with the exact Paystack reference:
+
+```sql
+update public.orders
+set status = 'paid', paid_at = coalesce(paid_at, now())
+where reference = 'SSS-ABCDEF012345' and status = 'pending'
+returning reference, status, quantity, ticket_phase, event_id, paid_at;
+```
+
+Then call `https://planetworldentetainment.com.ng/api/verify-payment?reference=SSS-ABCDEF012345` in a browser to verify it with Paystack and ensure the QR tickets and email are fulfilled. Never manually mark a failed or unverified payment as paid.
 
 ## Routes
 

@@ -30,9 +30,9 @@ export async function onRequestPost({ request, env }) {
       headers: { authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         email, amount: total * 100, reference: ref, currency: 'NGN',
-        callback_url: new URL('/?payment=complete', request.url).toString(),
+        callback_url: `${String(env.SITE_URL || 'https://planetworldentetainment.com.ng').replace(/\/$/, '')}/payment/complete?reference=${encodeURIComponent(ref)}`,
         subaccount: env.ORGANIZER_SUBACCOUNT_CODE, transaction_charge: bankCharges * 100, bearer: 'account',
-        metadata: { event_id: eventId, event_title: event.title, ticket_phase: phase, custom_fields: [
+        metadata: { event_id: eventId, event_title: event.title, ticket_phase: phase, buyer_name: fullName, quantity, custom_fields: [
           { display_name: 'Event', variable_name: 'event_title', value: event.title },
           { display_name: 'Ticket phase', variable_name: 'ticket_phase', value: phase },
           { display_name: 'Guest', variable_name: 'guest_name', value: fullName }

@@ -88,6 +88,12 @@ function AdminPage(){
   </main></Shell>;
 }
 
-function App(){const path=decodeURIComponent(location.pathname);const event=path.match(/^\/events\/([^/]+)\/?$/);return path==='/admin'||path==='/admin/'?<AdminPage/>:event?<EventPage slug={event[1]}/>:<HomePage/>;}
+function PaymentCompletePage(){
+  const reference=new URLSearchParams(location.search).get('reference')||'';const [state,setState]=useState('checking');const [message,setMessage]=useState('Confirming your payment and preparing your tickets…');
+  useEffect(()=>{let live=true;if(!reference){setState('failed');setMessage('The payment reference is missing.');return;}fetch(`/api/verify-payment?reference=${encodeURIComponent(reference)}`).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'Payment could not be confirmed yet.');if(live){setState('success');setMessage(d.email_pending?'Payment confirmed. Your tickets are ready, but the confirmation email is pending. Use the event page to retrieve your QR pass.':'Payment confirmed. Your ticket details have been sent to your checkout email. You can also retrieve your QR pass below.');}}).catch(e=>{if(live){setState('failed');setMessage(e.message);}});return()=>{live=false;};},[reference]);
+  return <Shell><main className="platform-main admin-page"><section className="admin-login"><span className="event-eyebrow">PAYSTACK CHECKOUT</span><h1>{state==='checking'?'Checking payment…':state==='success'?'You’re confirmed':'Payment not confirmed yet'}</h1><p>{message}</p>{reference&&<p>Reference: <strong>{reference}</strong></p>}{state==='checking'&&<LoaderCircle className="spin"/>}<a className="platform-button" href="/#events">Back to events <ArrowRight size={16}/></a></section></main></Shell>;
+}
+
+function App(){const path=decodeURIComponent(location.pathname);const event=path.match(/^\/events\/([^/]+)\/?$/);return path==='/admin'||path==='/admin/'?<AdminPage/>:path==='/payment/complete'||path==='/payment/complete/'?<PaymentCompletePage/>:event?<EventPage slug={event[1]}/>:<HomePage/>;}
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><App/></React.StrictMode>);

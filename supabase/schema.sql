@@ -37,6 +37,10 @@ create table if not exists public.orders (
   created_at timestamptz not null default now(),
   paid_at timestamptz
 );
+alter table public.orders add column if not exists email_sent boolean not null default false;
+alter table public.orders add column if not exists email_sending boolean not null default false;
+alter table public.orders add column if not exists email_claimed_at timestamptz;
+alter table public.orders add column if not exists email_message_id text;
 create table if not exists public.tickets (
   code text primary key,
   order_reference text not null references public.orders(reference),
@@ -161,21 +165,45 @@ begin update orders set status='cancelled' where reference=p_reference and statu
 
 create or replace function public.confirm_ticket_order(p_reference text,p_paystack_amount bigint,p_currency text,p_signing_secret text) returns jsonb
 language plpgsql security definer set search_path=public,extensions as $$
-declare o orders%rowtype; t integer; v_code text; v_payload text; v_sig text; v_unit integer;
+declare o orders%rowtype; t integer; v_existing integer; v_code text; v_payload text; v_sig text; v_unit integer;
 begin
  select * into o from orders where reference=p_reference for update;
  if not found then return jsonb_build_object('ok',false,'message','Order not found'); end if;
- if o.status='paid' then return jsonb_build_object('ok',true,'idempotent',true); end if;
  if p_currency<>'NGN' or p_paystack_amount<>o.total*100 then return jsonb_build_object('ok',false,'message','Payment amount mismatch'); end if;
- update orders set status='paid',paid_at=now() where reference=p_reference;
+ if o.status='cancelled' then return jsonb_build_object('ok',false,'message','Order was cancelled'); end if;
+ if o.status<>'paid' then update orders set status='paid',paid_at=coalesce(paid_at,now()) where reference=p_reference; end if;
+ select count(*) into v_existing from tickets where order_reference=p_reference;
+ if v_existing>=o.quantity then return jsonb_build_object('ok',true,'idempotent',true); end if;
  v_unit:=o.subtotal/o.quantity;
- for t in 1..o.quantity loop
+ for t in v_existing+1..o.quantity loop
   v_code:='SSS-'||upper(substr(encode(gen_random_bytes(6),'hex'),1,6)); v_payload:=v_code||'.'||p_reference;
   v_sig:=encode(hmac(v_payload,p_signing_secret,'sha256'),'hex');
   insert into tickets(code,order_reference,email,guest_name,tier,qr_token,event_id,ticket_phase,amount_paid)
   values(v_code,p_reference,o.email,o.full_name,o.tier,v_payload||'.'||v_sig,o.event_id,o.ticket_phase,v_unit);
  end loop;
  return jsonb_build_object('ok',true);
+end $$;
+
+-- Atomically claim an order email so Paystack webhook retries do not resend it.
+create or replace function public.claim_order_email(p_reference text) returns jsonb
+language plpgsql security definer set search_path=public,extensions as $$
+declare v_claimed boolean:=false;
+begin
+ update orders set email_sending=true,email_claimed_at=now()
+ where reference=p_reference and status='paid' and email_sent=false
+   and (email_sending=false or email_claimed_at<now()-interval '24 hours');
+ v_claimed:=found;
+ return jsonb_build_object('claimed',v_claimed);
+end $$;
+
+create or replace function public.finish_order_email(p_reference text,p_sent boolean,p_message_id text default null) returns jsonb
+language plpgsql security definer set search_path=public,extensions as $$
+begin
+ update orders set email_sent=p_sent,
+   email_message_id=case when p_sent then p_message_id else email_message_id end,
+   email_sending=false,email_claimed_at=null
+ where reference=p_reference;
+ return jsonb_build_object('ok',found);
 end $$;
 
 create or replace function public.redeem_ticket(p_token text,p_signing_secret text) returns jsonb
@@ -198,6 +226,8 @@ do $$ declare f regprocedure; begin
   'public.reserve_event_tickets(uuid,text,text,text,text,integer,integer,integer,integer)'::regprocedure,
   'public.cancel_ticket_hold(text)'::regprocedure,
   'public.confirm_ticket_order(text,bigint,text,text)'::regprocedure,
+  'public.claim_order_email(text)'::regprocedure,
+  'public.finish_order_email(text,boolean,text)'::regprocedure,
   'public.early_bird_remaining()'::regprocedure,
   'public.get_event_ticket_stats(uuid)'::regprocedure,
   'public.gate_auth_attempt(text,boolean)'::regprocedure,
@@ -205,3 +235,5 @@ do $$ declare f regprocedure; begin
  ] loop execute format('revoke all on function %s from public,anon,authenticated',f); execute format('grant execute on function %s to service_role',f); end loop;
 end $$;
 grant select on public.tickets,public.orders,public.events to service_role;
+
+notify pgrst, 'reload schema';

@@ -1,0 +1,105 @@
+import { json, rpc, sign, supabase, timingSafeEqual } from './_shared.js';
+
+const SITE_URL_DEFAULT = 'https://planetworldentetainment.com.ng';
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+const siteUrl = env => String(env.SITE_URL || SITE_URL_DEFAULT).replace(/\/$/, '');
+
+async function verifyPaystack(reference, env) {
+  const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+    headers: { authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}` }
+  });
+  const result = await response.json().catch(() => null);
+  const data = result?.data;
+  if (!response.ok || !result?.status || data?.status !== 'success' || data?.reference !== reference) {
+    return { error: result?.message || 'Paystack has not confirmed this payment.' };
+  }
+  return { data };
+}
+
+async function sendConfirmationEmail(reference, env) {
+  if (!env.BREVO_API_KEY) return { sent: false, skipped: true };
+  const claimed = await rpc(env, 'claim_order_email', { p_reference: reference });
+  if (!claimed.ok) return { error: 'Could not claim confirmation email.' };
+  if (!claimed.data?.claimed) return { sent: true, alreadySent: true };
+
+  let mailRequestStarted = false;
+  try {
+    const orderResult = await supabase(env, `rest/v1/orders?select=reference,full_name,email,quantity,ticket_phase,event_id,subtotal,total&reference=eq.${encodeURIComponent(reference)}&limit=1`);
+    const order = orderResult.data?.[0];
+    if (!orderResult.ok || !order) throw new Error('Confirmed order details could not be loaded.');
+    const [eventResult, ticketsResult] = await Promise.all([
+      supabase(env, `rest/v1/events?select=title,event_date,venue,slug&id=eq.${encodeURIComponent(order.event_id)}&limit=1`),
+      supabase(env, `rest/v1/tickets?select=code,qr_token&order_reference=eq.${encodeURIComponent(reference)}&order=created_at.asc`)
+    ]);
+    const event = eventResult.data?.[0];
+    const tickets = ticketsResult.data || [];
+    if (!eventResult.ok || !event || !ticketsResult.ok || tickets.length !== Number(order.quantity)) throw new Error('Ticket details are not ready for email.');
+
+    const url = `${siteUrl(env)}/events/${encodeURIComponent(event.slug)}?reference=${encodeURIComponent(reference)}`;
+    const codes = tickets.map(t => `<li style="margin:8px 0"><strong>${escapeHtml(t.code)}</strong><br><small>QR ticket token: ${escapeHtml(t.qr_token)}</small></li>`).join('');
+    const htmlContent = `<div style="font:16px/1.6 Arial,sans-serif;color:#14202f;max-width:620px;margin:auto"><h1 style="color:#087f8c">Payment confirmed</h1><p>Hello ${escapeHtml(order.full_name)}, your payment for <strong>${escapeHtml(event.title)}</strong> is confirmed.</p><p>${escapeHtml(event.event_date)}<br>${escapeHtml(event.venue)}<br>${escapeHtml(order.ticket_phase)} · ${escapeHtml(order.quantity)} ticket(s)</p><h2>Your ticket code${tickets.length === 1 ? '' : 's'}</h2><ul>${codes}</ul><p>To display your QR pass, open the event page and choose “Already paid? Retrieve your pass”. Use this checkout email and reference <strong>${escapeHtml(reference)}</strong>.</p><p><a href="${escapeHtml(url)}" style="display:inline-block;background:#087f8c;color:white;padding:12px 20px;border-radius:8px;text-decoration:none">Open event and retrieve pass</a></p><p>Thank you,<br>SOAKERS SPLASH SQUAD2027</p></div>`;
+    const senderEmail = env.BREVO_SENDER_EMAIL || 'tickets@planetworldentetainment.com.ng';
+    const senderName = env.BREVO_SENDER_NAME || 'SOAKERS SPLASH SQUAD2027';
+    mailRequestStarted = true;
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'api-key': env.BREVO_API_KEY, 'content-type': 'application/json' },
+      body: JSON.stringify({ sender: { email: senderEmail, name: senderName }, to: [{ email: order.email, name: order.full_name }], subject: `Your ${event.title} tickets are confirmed`, htmlContent, tags: ['ticket-confirmation'], headers: { 'X-Mailin-custom': `order-${reference}` } })
+    });
+    const mail = await response.json().catch(() => null);
+    if (!response.ok) {
+      await rpc(env, 'finish_order_email', { p_reference: reference, p_sent: false, p_message_id: null });
+      throw new Error(mail?.message || 'Brevo could not send the confirmation email.');
+    }
+    await rpc(env, 'finish_order_email', { p_reference: reference, p_sent: true, p_message_id: mail?.messageId || null });
+    return { sent: true };
+  } catch (error) {
+    // If the network failed after the send request began, keep the lease: Brevo may
+    // have accepted it, and releasing immediately could duplicate the message.
+    if (!mailRequestStarted) await rpc(env, 'finish_order_email', { p_reference: reference, p_sent: false, p_message_id: null });
+    return { error: error.message || 'Confirmation email failed.' };
+  }
+}
+
+export async function fulfillPaystackReference(reference, env) {
+  if (!env.PAYSTACK_SECRET_KEY || !env.QR_SIGNING_SECRET || env.QR_SIGNING_SECRET.length < 32 || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    return { response: json({ error: 'Payment verification is not configured.' }, 503) };
+  }
+  if (!/^SSS-[A-F0-9]{12}$/i.test(String(reference || ''))) return { response: json({ error: 'Invalid payment reference.' }, 400) };
+  try {
+    const verified = await verifyPaystack(reference, env);
+    if (verified.error) return { response: json({ error: verified.error }, 402) };
+    const transaction = verified.data;
+    const saved = await rpc(env, 'confirm_ticket_order', {
+      p_reference: reference,
+      p_paystack_amount: transaction.amount,
+      p_currency: transaction.currency,
+      p_signing_secret: env.QR_SIGNING_SECRET
+    });
+    if (!saved.ok || saved.data?.ok !== true) return { response: json({ error: saved.data?.message || 'Payment could not be recorded.' }, 500) };
+    const email = await sendConfirmationEmail(reference, env);
+    return { response: json({ verified: true, reference, email_sent: email.sent === true, email_pending: Boolean(email.error || email.skipped), message: 'Payment confirmed.' }) };
+  } catch {
+    return { response: json({ error: 'Payment verification is temporarily unavailable.' }, 503) };
+  }
+}
+
+export async function processWebhook(rawEvent, env) {
+  if (rawEvent.event === 'charge.success' && rawEvent.data?.status === 'success' && rawEvent.data?.reference) {
+    const result = await fulfillPaystackReference(String(rawEvent.data.reference), env);
+    const data = await result.response.clone().json().catch(() => ({}));
+    if (data.verified && data.email_pending) return { response: json({ error: 'Payment was recorded, but ticket email delivery is pending. Paystack should retry this webhook.' }, 503) };
+    return data.verified ? { response: json({ received: true }) } : result;
+  }
+  if (['charge.failed', 'charge.reversed'].includes(rawEvent.event) && rawEvent.data?.reference) {
+    const cancelled = await rpc(env, 'cancel_ticket_hold', { p_reference: rawEvent.data.reference });
+    if (!cancelled.ok) return { response: json({ error: 'Could not release payment hold.' }, 500) };
+  }
+  return { response: json({ received: true }) };
+}
+
+export async function verifyPaystackWebhookSignature(request, env, raw) {
+  const supplied = request.headers.get('x-paystack-signature') || '';
+  const expected = await sign(env.PAYSTACK_SECRET_KEY, raw, 'SHA-512');
+  return timingSafeEqual(supplied, expected);
+}
