@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
+    inputs:
+      reference:
+        description: Optional order reference to reconcile instead of the scheduled batch
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -20,12 +25,21 @@ jobs:
       - name: Verify recent Paystack payments and fulfill paid orders
         env:
           PAYMENT_RECONCILE_SECRET: ${{ secrets.PAYMENT_RECONCILE_SECRET }}
+          REFERENCE: ${{ github.event.inputs.reference || '' }}
         run: |
           if [ -z "$PAYMENT_RECONCILE_SECRET" ]; then
             echo "Repository secret PAYMENT_RECONCILE_SECRET is not configured."
             exit 1
           fi
+          RECONCILE_URL="https://planetworldentetainment.com.ng/api/internal/reconcile-payments"
+          if [ -n "$REFERENCE" ]; then
+            if [[ ! "$REFERENCE" =~ ^SSS-[A-Fa-f0-9]{12}$ ]]; then
+              echo "Invalid order reference."
+              exit 1
+            fi
+            RECONCILE_URL="${RECONCILE_URL}?reference=${REFERENCE}"
+          fi
           curl --silent --show-error --fail-with-body \
             -X POST \
             -H "x-payment-reconcile-secret: $PAYMENT_RECONCILE_SECRET" \
-            https://planetworldentetainment.com.ng/api/internal/reconcile-payments
+            "$RECONCILE_URL"

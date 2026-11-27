@@ -5,6 +5,7 @@ const referencePattern = /^SSS-[A-F0-9]{12}$/i;
 const safeReason = value => ({
   paystack_reference_mismatch: 'paystack_reference_mismatch',
   paystack_verification_unavailable: 'paystack_verification_unavailable',
+  paystack_transaction_not_found: 'paystack_transaction_not_found',
   'Payment amount mismatch': 'payment_amount_or_currency_mismatch',
   payment_amount_or_currency_mismatch: 'payment_amount_or_currency_mismatch',
   ticket_fulfillment_rejected: 'ticket_fulfillment_rejected',
@@ -45,25 +46,29 @@ export async function onRequestPost({ request, env }) {
   if (reference && !referencePattern.test(reference)) return json({ error: 'Invalid payment reference.' }, 400);
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const fields = 'reference,status,email_sent,email_sending,email_claimed_at,quantity,total,created_at,tickets(count)';
-  const path = reference
-    ? `rest/v1/orders?select=${fields}&reference=eq.${encodeURIComponent(reference)}&limit=1`
-    : `rest/v1/orders?select=${fields}&status=in.(pending,cancelled,paid)&created_at=gte.${encodeURIComponent(since)}&order=created_at.asc&limit=25`;
-  const orders = await supabase(env, path);
-  if (!orders.ok || !Array.isArray(orders.data)) return json({ error: 'Could not load orders for reconciliation.' }, 503);
-  if (reference && orders.data.length === 0) return json({ error: 'Order not found.' }, 404);
+  const paths = reference
+    ? [`rest/v1/orders?select=${fields}&reference=eq.${encodeURIComponent(reference)}&limit=1`]
+    : [
+        `rest/v1/orders?select=${fields}&status=eq.paid&email_sent=eq.false&order=created_at.asc&limit=25`,
+        `rest/v1/orders?select=${fields}&status=in.(pending,cancelled,paid)&created_at=gte.${encodeURIComponent(since)}&order=created_at.asc&limit=25`
+      ];
+  const orderResults = await Promise.all(paths.map(path => supabase(env, path)));
+  if (orderResults.some(result => !result.ok || !Array.isArray(result.data))) return json({ error: 'Could not load orders for reconciliation.' }, 503);
+  const scannedOrders = [...new Map(orderResults.flatMap(result => result.data).map(order => [order.reference, order])).values()];
+  if (reference && scannedOrders.length === 0) return json({ error: 'Order not found.' }, 404);
 
-  const summary = { scanned: orders.data.length, confirmed: 0, unpaid: 0, email_pending: 0, email_locked: 0, needs_review: 0, review_orders: [], email_pending_orders: [], email_locked_orders: [] };
-  for (const order of orders.data) {
+  const summary = { scanned: scannedOrders.length, confirmed: 0, unpaid: 0, email_pending: 0, email_locked: 0, needs_review: 0, review_orders: [], email_pending_orders: [], email_locked_orders: [] };
+  for (const order of scannedOrders) {
     try {
       if (order.status === 'paid') {
         const count = ticketCount(order);
-        if (!Number.isFinite(count)) {
+        const missingEmail = order.email_sent !== true;
+        if (!Number.isFinite(count) && !missingEmail) {
           summary.needs_review++;
           summary.review_orders.push({ reference: order.reference, reason: 'ticket_count_unavailable' });
           continue;
         }
-        const missingTickets = count < Number(order.quantity);
-        const missingEmail = order.email_sent !== true;
+        const missingTickets = Number.isFinite(count) && count < Number(order.quantity);
         if (!missingTickets && !missingEmail) continue;
 
         // A paid DB row is the trusted result of the verified payment flow. The

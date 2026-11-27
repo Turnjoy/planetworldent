@@ -38,9 +38,12 @@ async function verifyPaystack(reference, env) {
       if (response.ok && result?.status === false) return { pending: true };
       if (!response.ok) {
         const upstreamError = safePaystackMessage(result?.message || response.statusText, env.PAYSTACK_SECRET_KEY);
+        const reason = response.status === 400 && /transaction reference not found/i.test(upstreamError)
+          ? 'paystack_transaction_not_found'
+          : 'paystack_verification_unavailable';
         return {
           error: `Paystack verification failed with HTTP ${response.status}: ${upstreamError}`,
-          reason: 'paystack_verification_unavailable',
+          reason,
           upstream_status: response.status,
           upstream_error: upstreamError
         };

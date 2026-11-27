@@ -319,14 +319,19 @@ test('scheduled reconciliation is secret-protected and idempotently fulfills ver
   });
 });
 
-test('paid order with missing tickets is repaired and emailed without calling Paystack', async () => {
+test('default reconciliation repairs older paid orders with missing tickets and email without calling Paystack', async () => {
   const reference='SSS-4E3084F40A5B', code='SSS-123456', payload=`${code}.${reference}`;
   const token=`${payload}.${await sign(env.QR_SIGNING_SECRET,payload)}`;
   const emailEnv={...env,PAYMENT_RECONCILE_SECRET:'r'.repeat(64),BREVO_API_KEY:'brevo-test-key'};
   const calls=[];
   await withFetch(async(url,init={})=>{
     const target=String(url);calls.push({target,init});
-    if(target.includes('/rest/v1/orders?')&&target.includes('tickets(count)'))return response([{reference,status:'paid',email_sent:false,email_sending:false,email_claimed_at:null,quantity:1,total:3148,created_at:new Date().toISOString(),tickets:[{count:0}]}]);
+    if(target.includes('/rest/v1/orders?')&&target.includes('status=eq.paid')){
+      assert.match(target,/email_sent=eq\.false/);
+      assert.doesNotMatch(target,/created_at=gte\./);
+      return response([{reference,status:'paid',email_sent:false,email_sending:false,email_claimed_at:null,quantity:1,total:3148,created_at:new Date(Date.now()-60*24*60*60*1000).toISOString(),tickets:[{}]}]);
+    }
+    if(target.includes('/rest/v1/orders?')&&target.includes('created_at=gte.'))return response([]);
     if(target.includes('/rest/v1/orders?')&&target.includes('total,quantity'))return response([{reference,status:'paid',total:3148,quantity:1,email_sent:false,email_sending:false,email_claimed_at:null}]);
     if(target.includes('/rpc/confirm_ticket_order')){assert.equal(JSON.parse(init.body).p_paystack_amount,314800);return response({ok:true});}
     if(target.includes('/rpc/claim_order_email'))return response({claimed:true});
@@ -338,12 +343,29 @@ test('paid order with missing tickets is repaired and emailed without calling Pa
     if(target.includes('api.paystack.co'))throw new Error('Paid database order must not be blocked by a fresh Paystack amount lookup');
     throw new Error(`Unexpected request ${target}`);
   },async()=>{
-    const result=await reconcilePaymentsPost({request:request(`https://tickets.test/api/internal/reconcile-payments?reference=${reference}`,'POST',undefined,{'x-payment-reconcile-secret':emailEnv.PAYMENT_RECONCILE_SECRET}),env:emailEnv});
+    const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':emailEnv.PAYMENT_RECONCILE_SECRET}),env:emailEnv});
     assert.equal(result.status,200);
     const summary=await result.json();assert.equal(summary.scanned,1);assert.equal(summary.confirmed,1);assert.equal(summary.email_pending,0);assert.equal(summary.needs_review,0);
     assert.equal(calls.filter(call=>call.target.includes('/rpc/confirm_ticket_order')).length,1);
     assert.equal(calls.filter(call=>call.target==='https://api.brevo.com/v3/smtp/email').length,1);
     assert.equal(calls.some(call=>call.target.includes('api.paystack.co')),false);
+  });
+});
+
+test('reconciliation accepts authenticated reference overrides in query and JSON body',async()=>{
+  const reference='SSS-4E3084F40A5B';const reconciliationEnv={...env,PAYMENT_RECONCILE_SECRET:'r'.repeat(64)};
+  const targets=[];
+  await withFetch(async url=>{
+    const target=String(url);targets.push(target);
+    assert.match(target,/reference=eq\.SSS-4E3084F40A5B/);
+    return response([]);
+  },async()=>{
+    const headers={'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET};
+    const queryResult=await reconcilePaymentsPost({request:request(`https://tickets.test/api/internal/reconcile-payments?reference=${reference}`,'POST',undefined,headers),env:reconciliationEnv});
+    const bodyResult=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',{reference},headers),env:reconciliationEnv});
+    assert.equal(queryResult.status,404);
+    assert.equal(bodyResult.status,404);
+    assert.equal(targets.length,2);
   });
 });
 
@@ -391,7 +413,7 @@ test('needs_review includes only safe reference and a specific failure reason',a
   });
 });
 
-test('reconciliation reports the upstream Paystack status and message without retrying non-retryable errors',async()=>{
+test('reconciliation reports a specific safe reason for missing Paystack references',async()=>{
   const reference='SSS-4E3084F40A5B';const reconciliationEnv={...env,PAYMENT_RECONCILE_SECRET:'r'.repeat(64)};
   let verifyAttempts=0;
   await withFetch(async(url)=>{
@@ -399,14 +421,15 @@ test('reconciliation reports the upstream Paystack status and message without re
     if(target.includes('/rest/v1/orders?'))return response([{reference,status:'pending',email_sent:false,email_sending:false,email_claimed_at:null,quantity:1,total:3148,created_at:new Date().toISOString(),tickets:[{count:0}]}]);
     if(target.includes('api.paystack.co/transaction/verify/')){
       verifyAttempts++;
-      return response({status:false,message:'Transaction not found'},404);
+      return response({status:false,message:'Transaction reference not found'},400);
     }
     throw new Error(`Unexpected request ${target}`);
   },async()=>{
     const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET}),env:reconciliationEnv});
     assert.equal(result.status,503);
     const summary=await result.json();
-    assert.deepEqual(summary.review_orders,[{reference,reason:'paystack_verification_unavailable',upstream_status:404,upstream_error:'Transaction not found'}]);
+    assert.equal(summary.needs_review,1);
+    assert.deepEqual(summary.review_orders,[{reference,reason:'paystack_transaction_not_found',upstream_status:400,upstream_error:'Transaction reference not found'}]);
     assert.equal(verifyAttempts,1);
   });
 });
