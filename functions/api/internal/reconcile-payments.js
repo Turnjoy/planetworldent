@@ -98,7 +98,10 @@ export async function onRequestPost({ request, env }) {
         summary.unpaid++;
       } else {
         summary.needs_review++;
-        summary.review_orders.push({ reference: order.reference, reason: safeReason(body.reason || body.error) });
+        const review = { reference: order.reference, reason: safeReason(body.reason || body.error) };
+        if (Number.isInteger(body.upstream_status)) review.upstream_status = body.upstream_status;
+        if (typeof body.upstream_error === 'string') review.upstream_error = body.upstream_error;
+        summary.review_orders.push(review);
       }
     } catch {
       summary.needs_review++;

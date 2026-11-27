@@ -294,10 +294,18 @@ test('scheduled reconciliation is secret-protected and idempotently fulfills ver
   const unauthorized=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST'),env:reconciliationEnv});
   assert.equal(unauthorized.status,401);
   const calls=[];
+  let verifyAttempts=0;
   await withFetch(async (url,init={})=>{
     const target=String(url);calls.push({target,init});
     if(target.includes('/rest/v1/orders?'))return response([{reference:'SSS-ABCDEF012345',status:'pending',email_sent:false,quantity:1,total:3148,tickets:[{count:0}]}]);
-    if(target.includes('/transaction/verify/'))return response({status:true,data:{status:'success',reference:'SSS-ABCDEF012345',amount:314800,currency:'NGN'}});
+    if(target.includes('/transaction/verify/')){
+      verifyAttempts++;
+      assert.equal(init.headers.authorization,`Bearer ${env.PAYSTACK_SECRET_KEY}`);
+      assert.equal(init.headers['user-agent'],'PlanetWorldEnt-Reconcile/1.0');
+      if(verifyAttempts===1)throw new Error('network timeout');
+      if(verifyAttempts===2)return response({status:false,message:'Too many requests'},429);
+      return response({status:true,data:{status:'success',reference:'SSS-ABCDEF012345',amount:314800,currency:'NGN'}});
+    }
     if(target.includes('/rpc/confirm_ticket_order'))return response({ok:true,idempotent:true});
     if(target.includes('/rpc/claim_order_email'))return response({claimed:false});
     throw new Error(`Unexpected request ${target}`);
@@ -307,6 +315,7 @@ test('scheduled reconciliation is secret-protected and idempotently fulfills ver
     const summary=await result.json();
     assert.equal(summary.scanned,1);assert.equal(summary.confirmed,1);assert.equal(summary.unpaid,0);assert.equal(summary.needs_review,0);assert.equal(summary.ok,true);
     assert.equal(calls.filter(call=>call.target.includes('/rpc/confirm_ticket_order')).length,1);
+    assert.equal(verifyAttempts,3);
   });
 });
 
@@ -379,5 +388,25 @@ test('needs_review includes only safe reference and a specific failure reason',a
   },async()=>{
     const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET}),env:reconciliationEnv});
     assert.equal(result.status,503);assert.deepEqual((await result.json()).review_orders,[{reference,reason:'payment_amount_or_currency_mismatch'}]);
+  });
+});
+
+test('reconciliation reports the upstream Paystack status and message without retrying non-retryable errors',async()=>{
+  const reference='SSS-4E3084F40A5B';const reconciliationEnv={...env,PAYMENT_RECONCILE_SECRET:'r'.repeat(64)};
+  let verifyAttempts=0;
+  await withFetch(async(url)=>{
+    const target=String(url);
+    if(target.includes('/rest/v1/orders?'))return response([{reference,status:'pending',email_sent:false,email_sending:false,email_claimed_at:null,quantity:1,total:3148,created_at:new Date().toISOString(),tickets:[{count:0}]}]);
+    if(target.includes('api.paystack.co/transaction/verify/')){
+      verifyAttempts++;
+      return response({status:false,message:'Transaction not found'},404);
+    }
+    throw new Error(`Unexpected request ${target}`);
+  },async()=>{
+    const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET}),env:reconciliationEnv});
+    assert.equal(result.status,503);
+    const summary=await result.json();
+    assert.deepEqual(summary.review_orders,[{reference,reason:'paystack_verification_unavailable',upstream_status:404,upstream_error:'Transaction not found'}]);
+    assert.equal(verifyAttempts,1);
   });
 });

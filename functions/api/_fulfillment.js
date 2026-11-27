@@ -4,21 +4,70 @@ const SITE_URL_DEFAULT = 'https://planetworldentetainment.com.ng';
 const WHATSAPP_URL = `https://wa.me/2349157428112?text=${encodeURIComponent('Hello Plannet World Entertainment, I need help with my Soakers Splash Squad 2027 ticket.')}`;
 const PHONE_URL = 'tel:07057642817';
 const EMAIL_URL = 'mailto:tickets@planetworldentetainment.com.ng';
+const PAYSTACK_VERIFY_USER_AGENT = 'PlanetWorldEnt-Reconcile/1.0';
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 const siteUrl = env => String(env.SITE_URL || SITE_URL_DEFAULT).replace(/\/$/, '');
 
+function safePaystackMessage(value, secret) {
+  const message = String(value || '').replaceAll(secret, '[redacted]').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]');
+  return message.slice(0, 300) || 'No error message provided.';
+}
+
 async function verifyPaystack(reference, env) {
-  const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
-    headers: { authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}` }
-  });
-  const result = await response.json().catch(() => null);
-  const data = result?.data;
-  if (data?.reference && data.reference !== reference) return { error: 'Paystack returned a different payment reference.', reason: 'paystack_reference_mismatch' };
-  if (data?.status && data.status !== 'success') return { pending: true };
-  if (response.ok && result?.status === false) return { pending: true };
-  if (response.status === 404) return { pending: true };
-  if (!response.ok || !result?.status || data?.status !== 'success') return { error: 'Paystack verification is temporarily unavailable.', reason: 'paystack_verification_unavailable' };
-  return { data };
+  const url = `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`,
+          'user-agent': PAYSTACK_VERIFY_USER_AGENT
+        }
+      });
+      const body = await response.text();
+      let result = null;
+      try { result = JSON.parse(body); } catch { /* Report malformed upstream responses below. */ }
+
+      if ((!response.ok && (response.status === 429 || response.status >= 500)) && attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 150 * (2 ** attempt)));
+        continue;
+      }
+
+      const data = result?.data;
+      if (data?.reference && data.reference !== reference) return { error: 'Paystack returned a different payment reference.', reason: 'paystack_reference_mismatch' };
+      if (response.ok && data?.status && data.status !== 'success') return { pending: true };
+      if (response.ok && result?.status === false) return { pending: true };
+      if (!response.ok) {
+        const upstreamError = safePaystackMessage(result?.message || response.statusText, env.PAYSTACK_SECRET_KEY);
+        return {
+          error: `Paystack verification failed with HTTP ${response.status}: ${upstreamError}`,
+          reason: 'paystack_verification_unavailable',
+          upstream_status: response.status,
+          upstream_error: upstreamError
+        };
+      }
+      if (!result?.status || data?.status !== 'success') {
+        const upstreamError = safePaystackMessage(result?.message || 'Unexpected response from Paystack.', env.PAYSTACK_SECRET_KEY);
+        return {
+          error: `Paystack verification failed with HTTP ${response.status}: ${upstreamError}`,
+          reason: 'paystack_verification_unavailable',
+          upstream_status: response.status,
+          upstream_error: upstreamError
+        };
+      }
+      return { data };
+    } catch (error) {
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 150 * (2 ** attempt)));
+        continue;
+      }
+      const upstreamError = safePaystackMessage(error?.message || 'Network request failed.', env.PAYSTACK_SECRET_KEY);
+      return {
+        error: `Paystack verification request failed: ${upstreamError}`,
+        reason: 'paystack_verification_unavailable',
+        upstream_error: upstreamError
+      };
+    }
+  }
 }
 
 export async function repairRecordedPaidOrder(reference, env) {
@@ -113,7 +162,14 @@ export async function fulfillPaystackReference(reference, env) {
   try {
     const verified = await verifyPaystack(reference, env);
     if (verified.pending) return { response: json({ error: 'Paystack has not confirmed this payment.' }, 402) };
-    if (verified.error) return { response: json({ error: verified.error, reason: verified.reason }, 503) };
+    if (verified.error) return {
+      response: json({
+        error: verified.error,
+        reason: verified.reason,
+        ...(verified.upstream_status === undefined ? {} : { upstream_status: verified.upstream_status }),
+        ...(verified.upstream_error === undefined ? {} : { upstream_error: verified.upstream_error })
+      }, 503)
+    };
     const transaction = verified.data;
     const saved = await rpc(env, 'confirm_ticket_order', {
       p_reference: reference,
