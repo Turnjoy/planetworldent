@@ -38,12 +38,19 @@ async function verifyPaystack(reference, env) {
       if (response.ok && result?.status === false) return { pending: true };
       if (!response.ok) {
         const upstreamError = safePaystackMessage(result?.message || response.statusText, env.PAYSTACK_SECRET_KEY);
-        const reason = response.status === 400 && /transaction reference not found/i.test(upstreamError)
-          ? 'paystack_transaction_not_found'
-          : 'paystack_verification_unavailable';
+        const referenceNotFound = response.status === 404
+          || (response.status === 400 && /transaction reference not found/i.test(upstreamError));
+        if (referenceNotFound) {
+          return {
+            pending: true,
+            reason: 'paystack_transaction_not_found',
+            upstream_status: response.status,
+            upstream_error: upstreamError
+          };
+        }
         return {
           error: `Paystack verification failed with HTTP ${response.status}: ${upstreamError}`,
-          reason,
+          reason: 'paystack_verification_unavailable',
           upstream_status: response.status,
           upstream_error: upstreamError
         };
@@ -164,7 +171,14 @@ export async function fulfillPaystackReference(reference, env) {
   if (!/^SSS-[A-F0-9]{12}$/i.test(String(reference || ''))) return { response: json({ error: 'Invalid payment reference.' }, 400) };
   try {
     const verified = await verifyPaystack(reference, env);
-    if (verified.pending) return { response: json({ error: 'Paystack has not confirmed this payment.' }, 402) };
+    if (verified.pending) return {
+      response: json({
+        error: 'Paystack has not confirmed this payment.',
+        ...(verified.reason === undefined ? {} : { reason: verified.reason }),
+        ...(verified.upstream_status === undefined ? {} : { upstream_status: verified.upstream_status }),
+        ...(verified.upstream_error === undefined ? {} : { upstream_error: verified.upstream_error })
+      }, 402)
+    };
     if (verified.error) return {
       response: json({
         error: verified.error,

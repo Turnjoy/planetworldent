@@ -18,10 +18,8 @@ export async function onRequestPost({ request, env }) {
     const row = Array.isArray(stats.data) ? stats.data[0] : stats.data;
     if (!stats.ok || !row) return json({ error: 'Current ticket pricing is unavailable. Please try again.' }, 503);
     const subtotal = Number(row.current_price) * quantity;
-    const bankCharges = Math.min(2000, Math.ceil(((subtotal + 100) / (1 - 0.015)) - subtotal));
-    const total = subtotal + bankCharges;
     const ref = `SSS-${crypto.randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`;
-    const hold = await rpc(env, 'reserve_event_tickets', { p_event_id: eventId, p_reference: ref, p_full_name: fullName, p_email: email, p_phone: phone, p_quantity: quantity, p_subtotal: subtotal, p_fee: bankCharges, p_total: total });
+    const hold = await rpc(env, 'reserve_event_tickets', { p_event_id: eventId, p_reference: ref, p_full_name: fullName, p_email: email, p_phone: phone, p_quantity: quantity, p_subtotal: subtotal, p_fee: 0, p_total: subtotal });
     if (!hold.ok || hold.data?.ok === false) return json({ error: hold.data?.message || hold.message || 'Ticket inventory changed. Please refresh and try again.' }, hold.status >= 400 ? hold.status : 409);
     const phase = hold.data.ticket_phase;
 
@@ -29,9 +27,9 @@ export async function onRequestPost({ request, env }) {
       method: 'POST',
       headers: { authorization: `Bearer ${env.PAYSTACK_SECRET_KEY}`, 'content-type': 'application/json' },
       body: JSON.stringify({
-        email, amount: total * 100, reference: ref, currency: 'NGN',
+        email, amount: subtotal * 100, reference: ref, currency: 'NGN',
         callback_url: `${String(env.SITE_URL || 'https://planetworldentetainment.com.ng').replace(/\/$/, '')}/payment/complete?reference=${encodeURIComponent(ref)}`,
-        subaccount: env.ORGANIZER_SUBACCOUNT_CODE, transaction_charge: bankCharges * 100, bearer: 'account',
+        subaccount: env.ORGANIZER_SUBACCOUNT_CODE, bearer: 'account',
         metadata: { event_id: eventId, event_title: event.title, ticket_phase: phase, buyer_name: fullName, quantity, custom_fields: [
           { display_name: 'Event', variable_name: 'event_title', value: event.title },
           { display_name: 'Ticket phase', variable_name: 'ticket_phase', value: phase },

@@ -57,7 +57,7 @@ export async function onRequestPost({ request, env }) {
   const scannedOrders = [...new Map(orderResults.flatMap(result => result.data).map(order => [order.reference, order])).values()];
   if (reference && scannedOrders.length === 0) return json({ error: 'Order not found.' }, 404);
 
-  const summary = { scanned: scannedOrders.length, confirmed: 0, unpaid: 0, email_pending: 0, email_locked: 0, needs_review: 0, review_orders: [], email_pending_orders: [], email_locked_orders: [] };
+  const summary = { scanned: scannedOrders.length, confirmed: 0, unpaid: 0, unfound: 0, email_pending: 0, email_locked: 0, needs_review: 0, review_orders: [], unfound_orders: [], email_pending_orders: [], email_locked_orders: [] };
   for (const order of scannedOrders) {
     try {
       if (order.status === 'paid') {
@@ -101,6 +101,13 @@ export async function onRequestPost({ request, env }) {
         }
       } else if (result.response.status === 402) {
         summary.unpaid++;
+        if (body.reason === 'paystack_transaction_not_found') {
+          summary.unfound++;
+          const unfound = { reference: order.reference, reason: body.reason };
+          if (Number.isInteger(body.upstream_status)) unfound.upstream_status = body.upstream_status;
+          if (typeof body.upstream_error === 'string') unfound.upstream_error = body.upstream_error;
+          summary.unfound_orders.push(unfound);
+        }
       } else {
         summary.needs_review++;
         const review = { reference: order.reference, reason: safeReason(body.reason || body.error) };

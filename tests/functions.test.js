@@ -117,7 +117,7 @@ test('admin event update enforces the PIN and updates requested fields', async (
   assert.equal((await result.json()).event.is_active, false);
 }));
 
-test('checkout uses current server price, reserves inventory, and sends Paystack split metadata', async () => {
+test('checkout charges the current ticket price without an extra platform fee', async () => {
   const calls = [];
   await withFetch(async (input, init = {}) => {
     const url = String(input); calls.push({ url, init });
@@ -134,13 +134,20 @@ test('checkout uses current server price, reserves inventory, and sends Paystack
     assert.equal(data.unit_price, 3000);
     const paystack = calls.find(call => call.url.includes('api.paystack.co'));
     const payload = JSON.parse(paystack.init.body);
-    assert.equal(payload.amount, 619_300);
+    assert.equal(payload.amount, 600_000);
     assert.equal(payload.subaccount, env.ORGANIZER_SUBACCOUNT_CODE);
+    assert.equal(payload.transaction_charge, undefined);
+    assert.equal(payload.bearer, 'account');
     assert.equal(payload.metadata.event_id, event.id);
     assert.equal(payload.metadata.ticket_phase, 'Early Bird');
     assert.equal(payload.metadata.quantity, 2);
     assert.equal(payload.callback_url, `https://planetworldentetainment.com.ng/payment/complete?reference=${payload.reference}`);
-    assert.equal(calls.find(call => call.url.includes('reserve_event_tickets')).init.method, 'POST');
+    const reservation = calls.find(call => call.url.includes('reserve_event_tickets'));
+    assert.equal(reservation.init.method, 'POST');
+    const order = JSON.parse(reservation.init.body);
+    assert.equal(order.p_subtotal, 6000);
+    assert.equal(order.p_fee, 0);
+    assert.equal(order.p_total, 6000);
   });
 });
 
@@ -413,23 +420,28 @@ test('needs_review includes only safe reference and a specific failure reason',a
   });
 });
 
-test('reconciliation reports a specific safe reason for missing Paystack references',async()=>{
+test('reconciliation classifies 400/404 missing Paystack references as unpaid without review',async()=>{
   const reference='SSS-4E3084F40A5B';const reconciliationEnv={...env,PAYMENT_RECONCILE_SECRET:'r'.repeat(64)};
-  let verifyAttempts=0;
-  await withFetch(async(url)=>{
-    const target=String(url);
-    if(target.includes('/rest/v1/orders?'))return response([{reference,status:'pending',email_sent:false,email_sending:false,email_claimed_at:null,quantity:1,total:3148,created_at:new Date().toISOString(),tickets:[{count:0}]}]);
-    if(target.includes('api.paystack.co/transaction/verify/')){
-      verifyAttempts++;
-      return response({status:false,message:'Transaction reference not found'},400);
-    }
-    throw new Error(`Unexpected request ${target}`);
-  },async()=>{
-    const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET}),env:reconciliationEnv});
-    assert.equal(result.status,503);
-    const summary=await result.json();
-    assert.equal(summary.needs_review,1);
-    assert.deepEqual(summary.review_orders,[{reference,reason:'paystack_transaction_not_found',upstream_status:400,upstream_error:'Transaction reference not found'}]);
-    assert.equal(verifyAttempts,1);
-  });
+  for (const status of [400,404]) {
+    let verifyAttempts=0;
+    await withFetch(async(url)=>{
+      const target=String(url);
+      if(target.includes('/rest/v1/orders?'))return response([{reference,status:'pending',email_sent:false,email_sending:false,email_claimed_at:null,quantity:1,total:3148,created_at:new Date().toISOString(),tickets:[{count:0}]}]);
+      if(target.includes('api.paystack.co/transaction/verify/')){
+        verifyAttempts++;
+        return response({status:false,message:'Transaction reference not found'},status);
+      }
+      throw new Error(`Unexpected request ${target}`);
+    },async()=>{
+      const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET}),env:reconciliationEnv});
+      assert.equal(result.status,200);
+      const summary=await result.json();
+      assert.equal(summary.unpaid,1);
+      assert.equal(summary.unfound,1);
+      assert.equal(summary.needs_review,0);
+      assert.deepEqual(summary.review_orders,[]);
+      assert.deepEqual(summary.unfound_orders,[{reference,reason:'paystack_transaction_not_found',upstream_status:status,upstream_error:'Transaction reference not found'}]);
+      assert.equal(verifyAttempts,1);
+    });
+  }
 });
