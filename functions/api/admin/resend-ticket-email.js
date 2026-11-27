@@ -1,5 +1,5 @@
 import { adminAuthorized, json, readJson, supabase } from '../_shared.js';
-import { sendConfirmationEmail } from '../_fulfillment.js';
+import { repairRecordedPaidOrder } from '../_fulfillment.js';
 
 export async function onRequestPost({ request, env }) {
   if (!adminAuthorized(request, env)) return json({ error: 'Enter the admin PIN to continue.' }, 401);
@@ -13,8 +13,9 @@ export async function onRequestPost({ request, env }) {
     });
     if (!prepared.ok) return json({ error: 'Could not prepare the paid order email.' }, 503);
     if (!Array.isArray(prepared.data) || prepared.data.length !== 1) return json({ error: 'Paid order not found, or its email is currently being sent.' }, 404);
-    const result = await sendConfirmationEmail(reference, env);
-    if (!result.sent) return json({ error: result.error || 'Ticket email could not be sent.' }, 502);
+    const result = await repairRecordedPaidOrder(reference, env);
+    if (!result.ok) return json({ error: 'Could not prepare tickets for this paid order.', reason: result.reason }, 502);
+    if (result.emailPending) return json({ error: 'The ticket email is still pending.', reason: result.reason || (result.emailLocked ? 'email_send_in_progress' : 'confirmation_email_pending') }, 502);
     return json({ sent: true, reference });
   } catch (error) {
     return json({ error: error.status === 413 ? 'Request is too large.' : 'Could not resend the ticket email.' }, error.status || 400);

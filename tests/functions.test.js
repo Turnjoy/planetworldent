@@ -254,6 +254,8 @@ test('admin can deliberately resend a paid ticket email with its QR image', asyn
   await withFetch(async (url,init={})=>{
     const target=String(url);
     if(target.includes('/rest/v1/orders?reference=eq.')){assert.equal(init.method,'PATCH');assert.match(target,/status=eq\.paid/);assert.match(target,/email_sending=eq\.false/);return response([{reference:'SSS-ABCDEF012345'}]);}
+    if(target.includes('/rest/v1/orders?')&&target.includes('total,quantity'))return response([{reference:'SSS-ABCDEF012345',status:'paid',total:3148,quantity:1,email_sent:false,email_sending:false,email_claimed_at:null}]);
+    if(target.includes('/rpc/confirm_ticket_order'))return response({ok:true,idempotent:true});
     if(target.includes('/rpc/claim_order_email'))return response({claimed:true});
     if(target.includes('/rest/v1/orders?'))return response([{reference:'SSS-ABCDEF012345',full_name:'Ada Guest',email:'ada@example.test',quantity:1,ticket_phase:'Early Bird',event_id:event.id}]);
     if(target.includes('/rest/v1/events?'))return response([{title:event.title,event_date:event.event_date,venue:event.venue,slug:event.slug}]);
@@ -294,7 +296,7 @@ test('scheduled reconciliation is secret-protected and idempotently fulfills ver
   const calls=[];
   await withFetch(async (url,init={})=>{
     const target=String(url);calls.push({target,init});
-    if(target.includes('/rest/v1/orders?'))return response([{reference:'SSS-ABCDEF012345',status:'pending',email_sent:false}]);
+    if(target.includes('/rest/v1/orders?'))return response([{reference:'SSS-ABCDEF012345',status:'pending',email_sent:false,quantity:1,total:3148,tickets:[{count:0}]}]);
     if(target.includes('/transaction/verify/'))return response({status:true,data:{status:'success',reference:'SSS-ABCDEF012345',amount:314800,currency:'NGN'}});
     if(target.includes('/rpc/confirm_ticket_order'))return response({ok:true,idempotent:true});
     if(target.includes('/rpc/claim_order_email'))return response({claimed:false});
@@ -302,7 +304,80 @@ test('scheduled reconciliation is secret-protected and idempotently fulfills ver
   },async()=>{
     const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET}),env:reconciliationEnv});
     assert.equal(result.status,200);
-    assert.deepEqual(await result.json(),{scanned:1,confirmed:1,unpaid:0,email_pending:0,needs_review:0,ok:true});
+    const summary=await result.json();
+    assert.equal(summary.scanned,1);assert.equal(summary.confirmed,1);assert.equal(summary.unpaid,0);assert.equal(summary.needs_review,0);assert.equal(summary.ok,true);
     assert.equal(calls.filter(call=>call.target.includes('/rpc/confirm_ticket_order')).length,1);
+  });
+});
+
+test('paid order with missing tickets is repaired and emailed without calling Paystack', async () => {
+  const reference='SSS-4E3084F40A5B', code='SSS-123456', payload=`${code}.${reference}`;
+  const token=`${payload}.${await sign(env.QR_SIGNING_SECRET,payload)}`;
+  const emailEnv={...env,PAYMENT_RECONCILE_SECRET:'r'.repeat(64),BREVO_API_KEY:'brevo-test-key'};
+  const calls=[];
+  await withFetch(async(url,init={})=>{
+    const target=String(url);calls.push({target,init});
+    if(target.includes('/rest/v1/orders?')&&target.includes('tickets(count)'))return response([{reference,status:'paid',email_sent:false,email_sending:false,email_claimed_at:null,quantity:1,total:3148,created_at:new Date().toISOString(),tickets:[{count:0}]}]);
+    if(target.includes('/rest/v1/orders?')&&target.includes('total,quantity'))return response([{reference,status:'paid',total:3148,quantity:1,email_sent:false,email_sending:false,email_claimed_at:null}]);
+    if(target.includes('/rpc/confirm_ticket_order')){assert.equal(JSON.parse(init.body).p_paystack_amount,314800);return response({ok:true});}
+    if(target.includes('/rpc/claim_order_email'))return response({claimed:true});
+    if(target.includes('/rest/v1/orders?')&&target.includes('full_name'))return response([{reference,full_name:'Test Guest',email:'guest@example.test',quantity:1,ticket_phase:'Early Bird',event_id:event.id}]);
+    if(target.includes('/rest/v1/events?'))return response([{title:event.title,event_date:event.event_date,venue:event.venue,slug:event.slug}]);
+    if(target.includes('/rest/v1/tickets?'))return response([{code,qr_token:token}]);
+    if(target==='https://api.brevo.com/v3/smtp/email'){assert.match(JSON.parse(init.body).htmlContent,/api\/ticket-qr\?token=/);return response({messageId:'brevo-reconcile'},201);}
+    if(target.includes('/rpc/finish_order_email'))return response({ok:true});
+    if(target.includes('api.paystack.co'))throw new Error('Paid database order must not be blocked by a fresh Paystack amount lookup');
+    throw new Error(`Unexpected request ${target}`);
+  },async()=>{
+    const result=await reconcilePaymentsPost({request:request(`https://tickets.test/api/internal/reconcile-payments?reference=${reference}`,'POST',undefined,{'x-payment-reconcile-secret':emailEnv.PAYMENT_RECONCILE_SECRET}),env:emailEnv});
+    assert.equal(result.status,200);
+    const summary=await result.json();assert.equal(summary.scanned,1);assert.equal(summary.confirmed,1);assert.equal(summary.email_pending,0);assert.equal(summary.needs_review,0);
+    assert.equal(calls.filter(call=>call.target.includes('/rpc/confirm_ticket_order')).length,1);
+    assert.equal(calls.filter(call=>call.target==='https://api.brevo.com/v3/smtp/email').length,1);
+    assert.equal(calls.some(call=>call.target.includes('api.paystack.co')),false);
+  });
+});
+
+test('already fulfilled paid orders are skipped without a second ticket RPC or email', async()=>{
+  let sideEffects=0;
+  const reconciliationEnv={...env,PAYMENT_RECONCILE_SECRET:'r'.repeat(64)};
+  await withFetch(async url=>{
+    if(String(url).includes('/rest/v1/orders?'))return response([{reference:'SSS-AE10EBEB0695',status:'paid',email_sent:true,email_sending:false,email_claimed_at:null,quantity:1,total:3148,created_at:new Date().toISOString(),tickets:[{count:1}]}]);
+    if(String(url).includes('/rpc/'))sideEffects++;
+    throw new Error(`Unexpected request ${url}`);
+  },async()=>{
+    const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET}),env:reconciliationEnv});
+    assert.equal(result.status,200);const summary=await result.json();assert.equal(summary.confirmed,0);assert.equal(summary.needs_review,0);assert.equal(sideEffects,0);
+  });
+});
+
+test('fresh email lease prevents a duplicate confirmation send but preserves the paid-order ticket repair',async()=>{
+  let confirmationCalls=0,emailClaims=0;
+  const reconciliationEnv={...env,PAYMENT_RECONCILE_SECRET:'r'.repeat(64),BREVO_API_KEY:'brevo-test-key'};
+  await withFetch(async(url,init={})=>{
+    const target=String(url);
+    if(target.includes('/rest/v1/orders?')&&target.includes('tickets(count)'))return response([{reference:'SSS-ABCDEF012345',status:'paid',email_sent:false,email_sending:true,email_claimed_at:new Date().toISOString(),quantity:1,total:3148,tickets:[{count:0}]}]);
+    if(target.includes('/rest/v1/orders?')&&target.includes('total,quantity'))return response([{reference:'SSS-ABCDEF012345',status:'paid',total:3148,quantity:1,email_sent:false,email_sending:true,email_claimed_at:new Date().toISOString()}]);
+    if(target.includes('/rpc/confirm_ticket_order')){confirmationCalls++;return response({ok:true});}
+    if(target.includes('/rpc/claim_order_email'))emailClaims++;
+    throw new Error(`Unexpected request ${target}`);
+  },async()=>{
+    const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET}),env:reconciliationEnv});
+    assert.equal(result.status,200);const summary=await result.json();assert.equal(summary.email_locked,1);assert.equal(summary.email_pending,0);assert.deepEqual(summary.email_locked_orders,[{reference:'SSS-ABCDEF012345',reason:'fresh_email_sending_lease'}]);
+    assert.equal(confirmationCalls,1);assert.equal(emailClaims,0);
+  });
+});
+
+test('needs_review includes only safe reference and a specific failure reason',async()=>{
+  const reference='SSS-4E3084F40A5B';const reconciliationEnv={...env,PAYMENT_RECONCILE_SECRET:'r'.repeat(64)};
+  await withFetch(async(url,init={})=>{
+    const target=String(url);
+    if(target.includes('/rest/v1/orders?'))return response([{reference,status:'pending',email_sent:false,email_sending:false,email_claimed_at:null,quantity:1,total:3148,created_at:new Date().toISOString(),tickets:[{count:0}]}]);
+    if(target.includes('api.paystack.co/transaction/verify/'))return response({status:true,data:{status:'success',reference,amount:300000,currency:'NGN'}});
+    if(target.includes('/rpc/confirm_ticket_order'))return response({ok:false,message:'Payment amount mismatch'});
+    throw new Error(`Unexpected request ${target}`);
+  },async()=>{
+    const result=await reconcilePaymentsPost({request:request('https://tickets.test/api/internal/reconcile-payments','POST',undefined,{'x-payment-reconcile-secret':reconciliationEnv.PAYMENT_RECONCILE_SECRET}),env:reconciliationEnv});
+    assert.equal(result.status,503);assert.deepEqual((await result.json()).review_orders,[{reference,reason:'payment_amount_or_currency_mismatch'}]);
   });
 });

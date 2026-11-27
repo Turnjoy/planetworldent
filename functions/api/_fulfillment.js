@@ -13,10 +13,45 @@ async function verifyPaystack(reference, env) {
   });
   const result = await response.json().catch(() => null);
   const data = result?.data;
-  if (!response.ok || !result?.status || data?.status !== 'success' || data?.reference !== reference) {
-    return { error: result?.message || 'Paystack has not confirmed this payment.' };
-  }
+  if (data?.reference && data.reference !== reference) return { error: 'Paystack returned a different payment reference.', reason: 'paystack_reference_mismatch' };
+  if (data?.status && data.status !== 'success') return { pending: true };
+  if (response.ok && result?.status === false) return { pending: true };
+  if (response.status === 404) return { pending: true };
+  if (!response.ok || !result?.status || data?.status !== 'success') return { error: 'Paystack verification is temporarily unavailable.', reason: 'paystack_verification_unavailable' };
   return { data };
+}
+
+export async function repairRecordedPaidOrder(reference, env) {
+  if (!env.QR_SIGNING_SECRET || env.QR_SIGNING_SECRET.length < 32 || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    return { ok: false, reason: 'ticket_fulfillment_not_configured' };
+  }
+  const orderResult = await supabase(env, `rest/v1/orders?select=reference,status,total,quantity,email_sent,email_sending,email_claimed_at&reference=eq.${encodeURIComponent(reference)}&limit=1`);
+  const order = orderResult.data?.[0];
+  if (!orderResult.ok || !order) return { ok: false, reason: 'order_lookup_failed' };
+  if (order.status !== 'paid') return { ok: false, reason: 'order_not_paid' };
+
+  // A database-paid order has already passed the site's trusted payment confirmation
+  // path. Re-run its row-locked RPC using the stored amount to repair missing tickets.
+  const confirmed = await rpc(env, 'confirm_ticket_order', {
+    p_reference: reference,
+    p_paystack_amount: Number(order.total) * 100,
+    p_currency: 'NGN',
+    p_signing_secret: env.QR_SIGNING_SECRET
+  });
+  if (!confirmed.ok || confirmed.data?.ok !== true) return { ok: false, reason: 'ticket_fulfillment_rejected' };
+  if (order.email_sent) return { ok: true, emailSent: false };
+
+  const leaseTime = Date.parse(order.email_claimed_at || '');
+  const activeEmailLease = order.email_sending === true && Number.isFinite(leaseTime) && leaseTime > Date.now() - 24 * 60 * 60 * 1000;
+  if (activeEmailLease) return { ok: true, emailPending: true, emailLocked: true };
+
+  const email = await sendConfirmationEmail(reference, env);
+  if (email.error) return { ok: true, emailPending: true, reason: 'confirmation_email_failed' };
+  if (email.skipped) return { ok: true, emailPending: true, reason: 'confirmation_email_not_configured' };
+  // A concurrent sender may have won the atomic claim. Do not resend; let the next
+  // reconciliation observe the final email_sent state.
+  if (email.alreadySent) return { ok: true, emailPending: true, emailLocked: true };
+  return { ok: true, emailSent: true };
 }
 
 export async function sendConfirmationEmail(reference, env) {
@@ -77,7 +112,8 @@ export async function fulfillPaystackReference(reference, env) {
   if (!/^SSS-[A-F0-9]{12}$/i.test(String(reference || ''))) return { response: json({ error: 'Invalid payment reference.' }, 400) };
   try {
     const verified = await verifyPaystack(reference, env);
-    if (verified.error) return { response: json({ error: verified.error }, 402) };
+    if (verified.pending) return { response: json({ error: 'Paystack has not confirmed this payment.' }, 402) };
+    if (verified.error) return { response: json({ error: verified.error, reason: verified.reason }, 503) };
     const transaction = verified.data;
     const saved = await rpc(env, 'confirm_ticket_order', {
       p_reference: reference,
